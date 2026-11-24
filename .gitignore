@@ -1,0 +1,7 @@
+venv*/
+.venv/
+.env
+**/__pycache__/
+*.py[cod]
+backend/uploaded_cvs/*
+!backend/uploaded_cvs/.gitkeep
