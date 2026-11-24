@@ -51,12 +51,12 @@ ACTION_CUES = (
 )
 
 PREFERRED_PATTERN = re.compile(
-    r"\b(?:preferred|desirable|bonus|advantage|ideally|optional)\\b|"
+    r"\b(?:preferred|desirable|bonus|advantage|ideally|optional)\b|"
     r"nice to have|would be a plus",
     re.IGNORECASE
 )
 REQUIRED_PATTERN = re.compile(
-    r"\b(?:must|required|essential|mandatory|minimum)\\b|"
+    r"\b(?:must|required|essential|mandatory|minimum)\b|"
     r"we require|you are required",
     re.IGNORECASE
 )
@@ -330,11 +330,11 @@ def extract_cv_evidence(cv_text: str) -> List[dict]:
 def _entity_overlap(requirement: dict, evidence: dict) -> float:
     """Return exact phrase overlap between GLiNER entity spans."""
     req_terms = {
-        re.sub(r"\\s+", " ", entity["text"].casefold()).strip(" .,:;")
+        re.sub(r"\s+", " ", entity["text"].casefold()).strip(" .,:;")
         for entity in requirement.get("entities", [])
     }
     cv_terms = {
-        re.sub(r"\\s+", " ", entity["text"].casefold()).strip(" .,:;")
+        re.sub(r"\s+", " ", entity["text"].casefold()).strip(" .,:;")
         for entity in evidence.get("entities", [])
     }
     req_terms.discard("")
