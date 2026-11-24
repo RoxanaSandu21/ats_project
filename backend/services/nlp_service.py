@@ -50,9 +50,12 @@ ACTION_CUES = (
     "improved", "deployed", "analysed", "analyzed"
 )
 
+NICE_TO_HAVE_PATTERN = re.compile(
+    r"nice to have|\bbonus\b|\boptional\b|would be a plus",
+    re.IGNORECASE
+)
 PREFERRED_PATTERN = re.compile(
-    r"\b(?:preferred|desirable|bonus|advantage|ideally|optional)\b|"
-    r"nice to have|would be a plus",
+    r"\b(?:preferred|desirable|advantage|ideally)\b",
     re.IGNORECASE
 )
 REQUIRED_PATTERN = re.compile(
@@ -223,6 +226,8 @@ def _criterion_type(text: str, category: str) -> str:
 
 
 def _priority(text: str, criterion_type: str) -> Tuple[str, str]:
+    if NICE_TO_HAVE_PATTERN.search(text):
+        return "nice_to_have", "explicit wording"
     if PREFERRED_PATTERN.search(text):
         return "preferred", "explicit wording"
     if REQUIRED_PATTERN.search(text):
@@ -715,6 +720,15 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
             r"\b(monitored|monitoring|managed|tracked) (?:the )?(?:mailbox|sla|ola|service levels?)\b",
         )) else "none"
 
+    if any(term in requirement for term in ("incident", "service request", "logging", "tracking")):
+        if has((
+            r"\b(incident log(?:ging)?|logged incidents?|tracked incidents?|service tickets?|"
+            r"support tickets?|ticketing system|service requests?)\b",
+        )):
+            if "troubleshoot" in requirement or "support environment" in requirement:
+                return "contextual"
+            return "direct"
+
     if "troubleshoot" in requirement or "support environment" in requirement:
         support_environment = has((
             r"\b(service desk|help desk|technical support|it support|user support|customer support)\b",
@@ -770,18 +784,6 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
             r"\b(assisted|supported|resolved|handled|responded to|helped)\b",
         )):
             return "direct"
-        return "none"
-
-    if any(term in requirement for term in ("incident", "service request", "logging", "tracking")):
-        if has((
-            r"\b(incident log(?:ging)?|logged incidents?|tracked incidents?|service tickets?|"
-            r"support tickets?|ticketing system|service requests?)\b",
-        )):
-            return "direct"
-        if has((
-            r"\b(resolved|investigated|diagnosed|debugged)\b.{0,60}\b(issues?|bugs?|errors?)\b",
-        )):
-            return "contextual"
         return "none"
 
     if _entity_overlap({"entities": evidence.get("requirement_entities", [])}, evidence) > 0:
