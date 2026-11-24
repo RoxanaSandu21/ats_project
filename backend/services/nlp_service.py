@@ -341,36 +341,38 @@ def _entity_overlap(requirement: dict, evidence: dict) -> float:
     return len(req_terms & cv_terms) / len(req_terms)
 
 
-def _semantic_entity_overlap(requirement: dict, evidence: dict) -> float:
+def _semantic_entity_overlap(
+    requirement: dict,
+    evidence: dict,
+    entity_embeddings=None,
+    entity_indices=None
+) -> float:
     """
     Estimate whether extracted entity phrases are semantically related.
-    This avoids requiring identical surface wording (e.g. 'troubleshooting'
-    versus 'diagnosed and resolved issues') while retaining entity grounding.
+    Entity vectors are precomputed once per evaluation to avoid repeated
+    transformer calls for every requirement/evidence pair.
     """
-    req_terms = [entity["text"] for entity in requirement.get("entities", []) if entity.get("text")]
-    cv_terms = [entity["text"] for entity in evidence.get("entities", []) if entity.get("text")]
+    req_terms = [entity["text"].casefold() for entity in requirement.get("entities", []) if entity.get("text")]
+    cv_terms = [entity["text"].casefold() for entity in evidence.get("entities", []) if entity.get("text")]
     if not req_terms or not cv_terms:
         return 0.0
 
-    try:
-        req_vectors = embedding_model.encode(
-            req_terms, convert_to_tensor=True, normalize_embeddings=True
-        )
-        cv_vectors = embedding_model.encode(
-            cv_terms, convert_to_tensor=True, normalize_embeddings=True
-        )
-        similarities = util.cos_sim(req_vectors, cv_vectors)
-        # For every job entity, take its closest CV entity, then average.
-        # This is more tolerant than exact text equality but avoids a single
-        # unrelated pair being enough when the job contains several entities.
-        best_per_requirement = similarities.max(dim=1).values
-        return float(best_per_requirement.mean().item())
-    except Exception as exc:
-        print(f"[NLP] Entity similarity warning: {exc}")
+    if entity_embeddings is None or entity_indices is None:
         return _entity_overlap(requirement, evidence)
 
+    req_positions = [entity_indices[term] for term in req_terms if term in entity_indices]
+    cv_positions = [entity_indices[term] for term in cv_terms if term in entity_indices]
+    if not req_positions or not cv_positions:
+        return _entity_overlap(requirement, evidence)
 
-def _assess_evidence(requirement: dict, evidence: dict, similarity: float) -> Tuple[str, str, float]:
+    similarities = util.cos_sim(
+        entity_embeddings[req_positions],
+        entity_embeddings[cv_positions]
+    )
+    best_per_requirement = similarities.max(dim=1).values
+    return float(best_per_requirement.mean().item())
+
+def _assess_evidence(requirement: dict, evidence: dict, similarity: float, entity_embeddings=None, entity_indices=None) -> Tuple[str, str, float]:
     """
     Semantic similarity retrieves passages. Evidence is assessed using the
     passage type plus exact or semantic entity alignment. A strong sentence
@@ -386,16 +388,16 @@ def _assess_evidence(requirement: dict, evidence: dict, similarity: float) -> Tu
         return "Missing", "skills_list_does_not_demonstrate_responsibility", 0.0
 
     exact_overlap = _entity_overlap(requirement, evidence)
-    semantic_overlap = _semantic_entity_overlap(requirement, evidence)
+    semantic_overlap = _semantic_entity_overlap(requirement, evidence, entity_embeddings, entity_indices)
     entity_support = max(exact_overlap, semantic_overlap)
 
     # A responsibility needs a substantive action passage. A skill list may
     # support a skill/qualification, but cannot prove that the candidate has
     # performed the responsibility.
-    if entity_support >= 0.58 and similarity >= 0.40:
+    if entity_support >= 0.55 and similarity >= 0.38:
         if (
-            similarity >= 0.68
-            and entity_support >= 0.72
+            similarity >= 0.66
+            and entity_support >= 0.70
             and evidence_type == "action_statement"
         ):
             return "Full Match", "strong_semantic_entity_and_action_evidence", 100.0
@@ -412,13 +414,13 @@ def _assess_evidence(requirement: dict, evidence: dict, similarity: float) -> Tu
     # result only when the whole passage is strongly related and has the right
     # evidential form. This avoids the old 40% blanket rule.
     if criterion_type == "responsibility" and evidence_type == "action_statement":
-        if similarity >= 0.60:
+        if similarity >= 0.56:
             return "Partial Match", "strong_contextual_relation_review_required", 50.0
 
     if criterion_type == "qualification":
-        if evidence_type == "skills_list" and similarity >= 0.56:
+        if evidence_type == "skills_list" and similarity >= 0.52:
             return "Partial Match", "relevant_skills_list_review_required", 50.0
-        if evidence_type == "action_statement" and similarity >= 0.62:
+        if evidence_type == "action_statement" and similarity >= 0.58:
             return "Partial Match", "relevant_action_statement_review_required", 50.0
 
     if evidence_type == "action_statement" and similarity >= 0.70:
@@ -453,6 +455,20 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
     evidence_texts = [item["text"] for item in evidence]
     evidence_embeddings = embedding_model.encode(
         evidence_texts, convert_to_tensor=True, normalize_embeddings=True
+    )
+
+    entity_terms = list(dict.fromkeys(
+        entity["text"].casefold()
+        for record in requirements + evidence
+        for entity in record.get("entities", [])
+        if entity.get("text")
+    ))
+    entity_indices = {term: index for index, term in enumerate(entity_terms)}
+    entity_embeddings = (
+        embedding_model.encode(
+            entity_terms, convert_to_tensor=True, normalize_embeddings=True
+        )
+        if entity_terms else None
     )
 
     requirement_details = []
@@ -501,7 +517,8 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
         for candidate_idx in candidate_indices:
             candidate_similarity = float(similarities[candidate_idx].item())
             assessed[candidate_idx] = _assess_evidence(
-                req, evidence[candidate_idx], candidate_similarity
+                req, evidence[candidate_idx], candidate_similarity,
+                entity_embeddings, entity_indices
             )
 
         status_rank = {"Full Match": 2, "Partial Match": 1, "Missing": 0}
