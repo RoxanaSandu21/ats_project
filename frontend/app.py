@@ -11,16 +11,40 @@ st.write("Master's Project — GLiNER extraction, contextual semantic retrieval,
 menu = st.sidebar.selectbox("Navigation", ["Manage Jobs", "Evaluate Candidates"])
 
 
-def show_evaluation_details(bias_report):
+def show_evaluation_details(bias_report, weighted_score=None):
     details = (bias_report or {}).get("match_details", {})
     st.markdown("#### 📊 Evaluation overview")
+    if weighted_score is not None:
+        st.metric("Weighted compatibility", f"{weighted_score:.2f}%")
+
+    context_count = details.get("evidence_covered_count", 0)
+    criteria_count = details.get("requirements_count", 0)
     cols = st.columns(5)
-    cols[0].metric("Evidence & context coverage", f"{details.get('evidence_coverage', 0)}%")
+    cols[0].metric(
+        "Criteria with any context",
+        f"{context_count}/{criteria_count}",
+        help="Counts Full Match, Partial Match, and Transferable Context criteria. This is a count of retrieved context, not a compatibility percentage."
+    )
     cols[1].metric("Fully matched", details.get("fully_matched", 0))
-    cols[2].metric("Required without direct evidence", details.get("required_without_evidence", 0))
+    cols[2].metric("Partially matched", details.get("partial_matches", 0))
+    cols[3].metric("Transferable context", details.get("transferable_contexts", 0))
+    cols[4].metric("Missing", details.get("missing", 0))
+
+    required_cols = st.columns(2)
+    required_cols[0].metric(
+        "Required without direct evidence",
+        details.get("required_without_evidence", 0)
+    )
     required_score = details.get("required_only_score")
-    cols[3].metric("Required-only score", f"{required_score}%" if required_score is not None else "N/A")
-    cols[4].metric("Transferable context", details.get("transferable_contexts", 0))
+    required_cols[1].metric(
+        "Required-only score",
+        f"{required_score}%" if required_score is not None else "N/A"
+    )
+    st.caption(
+        "Weighted compatibility uses 100 points for Full Match, 50 for Partial Match, "
+        "25 for Transferable Context, and 0 for Missing, divided by the total criterion "
+        "weights. Criteria with any context is only a count; it does not measure evidence strength."
+    )
 
     st.caption(details.get("explanation", "No evaluation explanation available."))
     results = details.get("match_results", [])
@@ -157,13 +181,32 @@ elif menu == "Evaluate Candidates":
                             f"Processed: {data['full_name']} | Weighted compatibility: {data['match_score']}%"
                         )
                         summary = data.get("evaluation_summary", {})
+                        context_count = summary.get("evidence_covered_count", 0)
+                        criteria_count = summary.get("requirements_count", 0)
                         cols = st.columns(5)
-                        cols[0].metric("Evidence & context coverage", f"{summary.get('evidence_coverage', 0)}%")
+                        cols[0].metric(
+                            "Criteria with any context",
+                            f"{context_count}/{criteria_count}",
+                            help="Counts Full Match, Partial Match, and Transferable Context criteria. This is not a compatibility percentage."
+                        )
                         cols[1].metric("Fully matched", summary.get("fully_matched", 0))
-                        cols[2].metric("Required without direct evidence", summary.get("required_without_evidence", 0))
+                        cols[2].metric("Partially matched", summary.get("partial_matches", 0))
+                        cols[3].metric("Transferable context", summary.get("transferable_contexts", 0))
+                        cols[4].metric("Missing", summary.get("missing", 0))
+                        required_cols = st.columns(2)
+                        required_cols[0].metric(
+                            "Required without direct evidence",
+                            summary.get("required_without_evidence", 0)
+                        )
                         required_score = summary.get("required_only_score")
-                        cols[3].metric("Required-only score", f"{required_score}%" if required_score is not None else "N/A")
-                        cols[4].metric("Transferable context", summary.get("transferable_contexts", 0))
+                        required_cols[1].metric(
+                            "Required-only score",
+                            f"{required_score}%" if required_score is not None else "N/A"
+                        )
+                        st.caption(
+                            "Weighted compatibility is based on evidence strength (100/50/25/0 points), "
+                            "whereas criteria with any context is only a count."
+                        )
                     else:
                         st.error(f"Evaluation failed: {result.text}")
                 except requests.RequestException as exc:
@@ -184,7 +227,7 @@ elif menu == "Evaluate Candidates":
                     with st.expander(f"#{index} — {candidate.get('full_name', 'Unknown')} {color} ({score}%)"):
                         st.caption(f"Last evaluated: {candidate.get('submitted_at', 'Unknown')}")
                         st.write(f"**Contact:** {candidate.get('email', 'Unspecified')} | {candidate.get('phone', 'Unspecified')}")
-                        show_evaluation_details(candidate.get("bias_report", {}))
+                        show_evaluation_details(candidate.get("bias_report", {}), candidate.get("match_score"))
             else:
                 st.info("No candidates have been evaluated for this job yet.")
         except requests.RequestException as exc:
