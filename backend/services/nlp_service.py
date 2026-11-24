@@ -440,9 +440,22 @@ def _looks_like_cv_heading(text: str) -> bool:
 
 
 def _is_skills_list(text: str) -> bool:
-    lowered = text.casefold()
+    """Recognize common CV skill-section labels without classifying prose as a list."""
+    lowered = re.sub(r"\s+", " ", text.casefold()).strip()
+    if re.search(
+        r"^(?:technical )?skills?\s*:?$|^(?:technical )?skills?\s*:",
+        lowered,
+    ):
+        return True
+    if re.search(
+        r"^(?:technologies|technical skills|core competencies|programming languages)\s*:?$|"
+        r"^(?:technologies|technical skills|core competencies|programming languages)\s*:",
+        lowered,
+    ):
+        return True
     return any(label in lowered for label in (
-        "tools used:", "languages:", "frameworks", "databases:", "tools:"
+        "tools used:", "languages:", "frameworks", "databases:", "tools:",
+        "cloud & databases:", "devops & tools:", "frameworks & libraries:",
     ))
 
 
@@ -718,10 +731,21 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
         or "video conferencing" in requirement
         or "video and audio" in requirement
     ):
-        return "direct" if has((
+        av_mention = has((
             r"\b(audio[- ]visual|a/v|av equipment|video conferencing|video conference)\b",
             r"\b(projector|microphone|conference room|display setup|sound system)\b",
-        )) else "none"
+        ))
+        av_activity = has((
+            r"\b(set ?up|configured|programmed|tested|monitored|operated|supported|"
+            r"troubleshot|installed|maintained|prepared|provided|coordinated|managed)\b",
+        ))
+        if av_mention and av_activity:
+            return "direct"
+        if av_mention and evidence.get("evidence_type") in (
+            "skills_list", "experience_context", "context_window"
+        ):
+            return "contextual"
+        return "none"
 
     if "network" in requirement:
         return "direct" if has((
@@ -730,10 +754,22 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
         )) else "none"
 
     if "mailbox" in requirement or "ola" in requirement or "sla" in requirement:
-        return "direct" if has((
-            r"\b(mailbox|shared mailbox|ola|sla|service level agreement)\b",
-            r"\b(monitored|monitoring|managed|tracked) (?:the )?(?:mailbox|sla|ola|service levels?)\b",
-        )) else "none"
+        service_level_mention = has((
+            r"\b(shared )?mailboxes?\b|\b(?:ola|sla)s?\b|"
+            r"\bservice level agreements?\b|\bservice levels?\b",
+        ))
+        service_level_activity = has((
+            r"\b(manag(?:e|es|ed|ing)|monitor(?:s|ed|ing)?|track(?:s|ed|ing)?|"
+            r"follow(?:s|ed|ing)?|maintain(?:s|ed|ing)?|review(?:s|ed|ing)?|"
+            r"administer(?:s|ed|ing)?|measur(?:e|es|ed|ing))\b",
+        ))
+        if service_level_mention and service_level_activity:
+            return "direct"
+        if service_level_mention and evidence.get("evidence_type") in (
+            "skills_list", "experience_context", "context_window"
+        ):
+            return "contextual"
+        return "none"
 
     incident_logging_present = has((
         r"\b(record(?:ed|ing)?|log(?:ged|ging)?|track(?:ed|ing)?)\b.{0,40}\bincidents?\b",
@@ -789,11 +825,18 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
         or "point of contact" in requirement
         or "first-line support" in requirement
     ):
+        # Generic "communication" or "presented" wording is not proof of
+        # user-facing support. Require a named audience or a concrete user
+        # assistance interaction.
         if has((
-            r"\b(communicat(?:ed|ing|ion)|interact(?:ed|ing)|present(?:ed|ing))\b",
-            r"\b(taught|teaching|advised|assisted|supported) (?:students|customers|clients|users)\b",
-            r"\b(customer[- ]facing|client[- ]facing|user[- ]facing)\b",
-            r"\b(handled|answered) (?:customer|client|user) (?:questions|inquiries|calls)\b",
+            r"\bcommunicat(?:ed|ing)\s+(?:directly\s+)?with\s+(?:end[- ]?users?|users?|customers?|clients?)\b",
+            r"\binteract(?:ed|ing)\s+with\s+(?:end[- ]?users?|users?|customers?|clients?)\b",
+            r"\b(taught|teaching|advised|assisted|supported|helped|served)\s+"
+            r"(?:students|customers|clients|users|end[- ]?users)\b",
+            r"\b(handled|answered|resolved)\s+(?:customer|client|user)\s+"
+            r"(?:questions|inquiries|calls|requests|issues)\b",
+            r"\bprovided\s+(?:technical\s+)?(?:support|assistance|guidance)\s+to\s+"
+            r"(?:users|customers|clients|end[- ]?users)\b",
         )):
             return "direct"
         if has((
@@ -1092,8 +1135,17 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
             "alternative_evidence": alternatives,
         })
 
+    # Preserve the Ollama-compatible 0–80 weighted points for comparison,
+    # but also expose a conventional 0–100 percentage. A Full Match is 80
+    # points, so displaying the raw value with a '%' sign understates the
+    # normalized compatibility and makes a perfect result look like 80%.
     score = _calculate_weighted_match_score(requirement_details)
+    compatibility_percent = round(score / 80.0 * 100.0, 2)
     required_score = round(required_total / required_count, 2) if required_count else None
+    required_only_percent = (
+        round(required_score / 80.0 * 100.0, 2)
+        if required_score is not None else None
+    )
     coverage = round(evidence_covered / len(requirements) * 100, 2)
     source_statement_count = sum(len(item.get("source_statements", [])) for item in requirements)
 
@@ -1104,7 +1156,11 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
         "Partial matches can include transferable evidence, which must be reviewed by a human."
     )
     return {
+        # "score" remains the historical Ollama-compatible point value (0–80).
         "score": score,
+        "ollama_compatible_score": score,
+        "score_scale_max": 80.0,
+        "compatibility_percent": compatibility_percent,
         "evidence_coverage": coverage,
         "evidence_covered_count": evidence_covered,
         "requirements_count": len(requirements),
@@ -1115,6 +1171,7 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
         "missing": missing,
         "required_without_evidence": required_without_evidence,
         "required_only_score": required_score,
+        "required_only_percent": required_only_percent,
         "required_count": required_count,
         "match_results": requirement_details,
         "requirements": requirements,
@@ -1142,13 +1199,55 @@ def evaluate_bias(cv_text: str) -> dict:
     }
 
 
+def _extract_phone_number(text: str) -> str:
+    """Extract Romanian mobile numbers even when digits are separated by spaces."""
+    pattern = re.compile(
+        r"(?<!\d)(?:\+40|0040)?[\s().-]*0?[237](?:[\s().-]*\d){8}(?!\d)"
+    )
+    match = pattern.search(text)
+    if not match:
+        return "Unspecified"
+
+    raw = match.group(0).strip()
+    compact = re.sub(r"[^\d+]", "", raw)
+    if compact.startswith("0040"):
+        return "+40" + compact[4:]
+    if compact.startswith("+40"):
+        return compact
+    digits = compact
+    if digits.startswith("40") and len(digits) == 11:
+        return "+" + digits
+    if len(digits) == 9 and digits[0] in "237":
+        return "0" + digits
+    return digits
+
+
+def _extract_candidate_name(lines: List[str]) -> str:
+    """Choose a plausible name from the opening CV lines, skipping headers/contact lines."""
+    ignored_exact = {
+        "resume", "curriculum vitae", "cv", "personal details", "contact",
+        "contact details", "profile", "about me",
+    }
+    for line in lines[:8]:
+        candidate = re.sub(r"\s+", " ", line).strip(" |•·")
+        lowered = candidate.casefold()
+        if not candidate or lowered in ignored_exact:
+            continue
+        if re.search(r"@|https?://|www\.|linkedin|github|portfolio", lowered):
+            continue
+        if re.search(r"\+?\d[\d\s().-]{7,}", candidate):
+            continue
+        words = re.findall(r"[A-Za-zÀ-ÖØ-öø-ÿ][A-Za-zÀ-ÖØ-öø-ÿ'’-]*", candidate)
+        if 2 <= len(words) <= 4 and not re.search(r"[:/]", candidate):
+            return candidate[:255]
+    return lines[0][:255] if lines else "Unknown Candidate"
+
+
 def extract_candidate_info(cv_text: str) -> dict:
     email_match = re.search(r"[\w.+-]+@[\w.-]+\.\w+", cv_text)
-    phone_match = re.search(r"(?:\+40|0040|0)?\s*([732][0-9]{8})\b", cv_text)
     lines = [line.strip() for line in cv_text.split("\n") if line.strip()]
-    name = lines[0] if lines else "Unknown Candidate"
     return {
-        "full_name": name[:255],
-        "email": email_match.group(0) if email_match else "Unspecified",
-        "phone": phone_match.group(0) if phone_match else "Unspecified"
+        "full_name": _extract_candidate_name(lines),
+        "email": email_match.group(0).casefold() if email_match else "Unspecified",
+        "phone": _extract_phone_number(cv_text),
     }
