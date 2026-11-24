@@ -736,11 +736,20 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
 
     if any(term in requirement for term in ("incident", "service request", "logging", "tracking")):
         if has((
+            r"\b(record(?:ed|ing)?|log(?:ged|ging)?|track(?:ed|ing)?)\b.{0,40}\bincidents?\b",
             r"\b(incident log(?:ging)?|logged incidents?|tracked incidents?|service tickets?|"
             r"support tickets?|ticketing system|service requests?)\b",
         )):
             if "troubleshoot" in requirement or "support environment" in requirement:
-                return "contextual"
+                support_environment = has((
+                    r"\b(service desk|help desk|technical support|it support|user support|customer support)\b",
+                    r"\b(incident management|support tickets?|support environment|helpdesk)\b",
+                ))
+                troubleshooting_task = has((
+                    r"\b(troubleshoot(?:ing|ed)?|diagnos(?:ed|ing|is)|automated system diagnostics)\b",
+                    r"\b(resolved|investigated)\b.{0,60}\b(technical )?(?:issues|incidents|tickets)\b",
+                ))
+                return "direct" if support_environment and troubleshooting_task else "contextual"
             return "direct"
 
     if "troubleshoot" in requirement or "support environment" in requirement:
@@ -800,8 +809,6 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
             return "direct"
         return "none"
 
-    if _entity_overlap({"entities": evidence.get("requirement_entities", [])}, evidence) > 0:
-        return "direct"
     return "none"
 
 
