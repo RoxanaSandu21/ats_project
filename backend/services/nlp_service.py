@@ -964,7 +964,7 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
             show_progress_bar=False,
         )
         similarity_matrix = util.cos_sim(source_embeddings, evidence_embeddings)
-        best_similarity_per_evidence, best_source_per_evidence = similarity_matrix.max(dim=0)
+        best_similarity_per_evidence = similarity_matrix.max(dim=0).values
         grouped_assessment_requirement = dict(req)
         grouped_assessment_requirement["requirement"] = " ".join(
             [req.get("requirement", "")]
@@ -1017,7 +1017,6 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
             )
             closest_evidence = evidence[closest_idx]
 
-        weight = PRIORITY_WEIGHTS.get(req.get("priority", "unspecified"), 1.5)
         if req.get("priority") == "required":
             required_total += points
             required_count += 1
