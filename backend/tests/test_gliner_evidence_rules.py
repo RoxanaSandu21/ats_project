@@ -658,7 +658,7 @@ class OllamaParityEvidenceTests(unittest.TestCase):
 
     def test_phone_extraction_accepts_spaced_romanian_mobile_numbers(self):
         info = extract_candidate_info(
-            "RESUME\\nMaria Andriescu\\n"
+            "RESUME\nMaria Andriescu\n"
             "maria@example.com | +40 735 473 598 | Iași, Romania"
         )
         self.assertEqual(info["full_name"], "Maria Andriescu")
@@ -666,7 +666,7 @@ class OllamaParityEvidenceTests(unittest.TestCase):
         self.assertEqual(info["phone"], "+40735473598")
 
     def test_phone_extraction_keeps_local_romanian_format(self):
-        info = extract_candidate_info("John Doe\\n0732 164 275")
+        info = extract_candidate_info("John Doe\n0732 164 275")
         self.assertEqual(info["full_name"], "John Doe")
         self.assertEqual(info["phone"], "0732164275")
 
