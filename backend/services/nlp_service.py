@@ -591,14 +591,24 @@ def extract_cv_evidence(cv_text: str) -> List[dict]:
             raw_items.append((writing_sample, "language_context"))
 
     evidence = []
-    seen = set()
+    by_normalized_text = {}
     for text, evidence_type in raw_items:
         normalized = re.sub(r"\s+", " ", text.casefold()).strip()
-        if not normalized or normalized in seen:
+        if not normalized:
             continue
-        seen.add(normalized)
+
+        # The chosen English writing sample often duplicates a sentence/context
+        # window already added above. Merge its language marker instead of
+        # dropping it during deduplication.
+        existing = by_normalized_text.get(normalized)
+        if existing is not None:
+            if evidence_type == "language_context":
+                existing["is_english_writing_sample"] = True
+                existing["language_context_label"] = "English-language resume excerpt"
+            continue
+
         entities = _unique_entities(text)
-        evidence.append({
+        item = {
             "text": text,
             "quote": text,
             "label": (
@@ -609,9 +619,13 @@ def extract_cv_evidence(cv_text: str) -> List[dict]:
             "evidence_type": evidence_type,
             "entities": [{"text": entity["text"], "type": entity["type"]} for entity in entities],
             "is_english_writing_sample": evidence_type == "language_context",
-        })
-    return evidence
+        }
+        if evidence_type == "language_context":
+            item["language_context_label"] = "English-language resume excerpt"
+        evidence.append(item)
+        by_normalized_text[normalized] = item
 
+    return evidence
 
 def _entity_overlap(requirement: dict, evidence: dict) -> float:
     """Return exact phrase overlap between GLiNER entity spans."""
