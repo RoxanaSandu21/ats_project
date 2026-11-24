@@ -17,67 +17,80 @@ def show_evaluation_details(bias_report, weighted_score=None):
     if weighted_score is not None:
         st.metric("Weighted compatibility", f"{weighted_score:.2f}%")
 
-    saved_results = details.get("match_results", [])
-    if saved_results:
-        # Derive this count from stored statuses so older database evaluations
-        # are displayed correctly after the coverage definition changed.
-        context_count = sum(
-            1 for item in saved_results
+    results = details.get("match_results", [])
+    if results:
+        criteria_count = len(results)
+        evidence_count = sum(
+            1 for item in results
             if item.get("status") in ("Full Match", "Partial Match")
         )
-        criteria_count = len(saved_results)
     else:
-        context_count = details.get("evidence_covered_count", 0)
         criteria_count = details.get("requirements_count", 0)
-    cols = st.columns(5)
+        evidence_count = details.get("evidence_covered_count", 0)
+
+    source_count = details.get("source_statement_count", 0)
+    cols = st.columns(4)
     cols[0].metric(
-        "Criteria with direct/partial evidence",
-        f"{context_count}/{criteria_count}",
-        help="Counts only Full Match and Partial Match criteria. Transferable Context is shown separately because it is not direct evidence."
+        "Evidence coverage",
+        f"{evidence_count}/{criteria_count}",
+        help="Number of grouped criteria with direct or partial source-grounded evidence. This is not the compatibility score."
     )
     cols[1].metric("Fully matched", details.get("fully_matched", 0))
     cols[2].metric("Partially matched", details.get("partial_matches", 0))
-    cols[3].metric("Transferable context", details.get("transferable_contexts", 0))
-    cols[4].metric("Missing", details.get("missing", 0))
+    cols[3].metric("Missing", details.get("missing", 0))
 
     required_cols = st.columns(2)
-    required_cols[0].metric(
-        "Required without direct evidence",
-        details.get("required_without_evidence", 0)
-    )
+    required_cols[0].metric("Required without evidence", details.get("required_without_evidence", 0))
     required_score = details.get("required_only_score")
     required_cols[1].metric(
         "Required-only score",
         f"{required_score}%" if required_score is not None else "N/A"
     )
-    st.caption(
-        "Weighted compatibility uses 100 points for Full Match, 50 for Partial Match, "
-        "25 for Transferable Context, and 0 for Missing, divided by the total criterion "
-        "weights. Criteria with direct/partial evidence is only a count; it does not measure evidence strength."
-    )
 
+    st.caption(
+        "Weighted compatibility uses the same weighting model as the Ollama prototype: "
+        "Full Match = 80 points, Partial Match = 50 points, Missing = 0; required criteria "
+        "weigh 3.0, preferred/unspecified 1.5, and nice-to-have 1.0. Partial matches may "
+        "use transferable evidence, but the explanation distinguishes it from direct experience."
+    )
+    if source_count:
+        st.caption(
+            f"The evaluator consolidated {source_count} original job-post statements "
+            f"into {criteria_count} assessable criteria to avoid counting overlapping duties separately."
+        )
     st.caption(details.get("explanation", "No evaluation explanation available."))
-    results = details.get("match_results", [])
+
     if results:
         st.markdown("#### 🔍 Requirement-by-requirement evidence")
         for index, item in enumerate(results, 1):
             status = item.get("status", "Not assessed")
-            icon = "🟢" if status == "Full Match" else "🟡" if status in ("Partial Match", "Transferable Context") else "🔴"
-            priority = item.get("priority", "unspecified").title()
+            icon = "🟢" if status == "Full Match" else "🟡" if status == "Partial Match" else "🔴"
+            priority = item.get("priority", "unspecified").replace("_", " ").title()
             with st.expander(f"{icon} {index}. {item.get('requirement', 'Criterion')} — {status} ({priority})"):
                 st.write(f"**Category:** {item.get('category', 'Not classified')}")
                 st.write(f"**Criterion type:** {item.get('criterion_type', 'Not classified')}")
                 st.write(f"**Priority source:** {item.get('priority_source', 'Not stated')}")
-                st.write(f"**Semantic retrieval similarity:** {item.get('confidence', 0)}%")
+                st.write(f"**Weighted points:** {item.get('score', 0)}")
+                st.write(f"**Best retrieval similarity:** {item.get('confidence', 0)}%")
                 st.write(f"**Evidence assessment:** {item.get('evidence_strength', 'Not available')}")
+
+                source_statements = item.get("source_statements", [])
+                if source_statements:
+                    st.markdown("**Original job-post statements included in this criterion**")
+                    for statement in source_statements:
+                        st.write(f"• {statement}")
+
                 excerpt = item.get("cv_evidence", "")
                 if excerpt:
-                    st.markdown("**Potentially transferable CV context (not direct evidence)**" if status == "Transferable Context" else "**Retrieved supporting CV excerpt**")
+                    if item.get("evidence_strength") == "contextual_transferable_evidence":
+                        st.markdown("**Transferable CV context (not direct proof of the exact task)**")
+                    else:
+                        st.markdown("**Supporting CV excerpt**")
                     st.info(excerpt)
                 else:
                     closest = item.get("closest_evidence", {})
                     if closest.get("text"):
-                        st.markdown("**Closest retrieved CV passage (not counted as evidence)**")
+                        st.markdown("**Closest retrieved passage (not accepted as evidence)**")
                         st.info(
                             f"{closest.get('text', '')}\n\n"
                             f"Passage type: {closest.get('evidence_type', 'context')} | "
@@ -86,19 +99,28 @@ def show_evaluation_details(bias_report, weighted_score=None):
                     else:
                         st.warning("No substantive CV passage was available for comparison.")
                 st.caption(item.get("evidence_note", ""))
+
                 alternatives = item.get("alternative_evidence", [])
                 if alternatives:
-                    st.markdown("**Other retrieved excerpts (not automatically treated as proof)**")
+                    st.markdown("**Alternative retrieved excerpts**")
                     for alternative in alternatives:
-                        st.write(f"• {alternative.get('text', '')} — similarity {alternative.get('similarity', 0)}")
+                        st.write(
+                            f"• {alternative.get('text', '')} — "
+                            f"similarity {alternative.get('similarity', 0)}"
+                        )
 
     requirements = details.get("requirements", [])
     if requirements:
-        with st.expander("📌 Extracted job criteria"):
-            display_requirements = [{
-                **item,
-                "entities": ", ".join(entity.get("text", "") for entity in item.get("entities", []))
-            } for item in requirements]
+        with st.expander("📌 Grouped job criteria and original statements"):
+            display_requirements = []
+            for item in requirements:
+                row = dict(item)
+                row["entities"] = ", ".join(
+                    entity.get("text", "") for entity in item.get("entities", [])
+                )
+                row["source_statements"] = " | ".join(item.get("source_statements", []))
+                row.pop("source_details", None)
+                display_requirements.append(row)
             st.dataframe(pd.DataFrame(display_requirements), use_container_width=True, hide_index=True)
 
     excluded = details.get("excluded_job_information", [])
@@ -109,19 +131,22 @@ def show_evaluation_details(bias_report, weighted_score=None):
 
     cv_evidence = details.get("cv_evidence", [])
     if cv_evidence:
-        with st.expander("📄 Extracted CV context"):
+        with st.expander("📄 Extracted CV evidence and context"):
             st.dataframe(
-                pd.DataFrame([{"CV excerpt": item.get("text", ""),
-                               "Evidence type": item.get("evidence_type", "context"),
-                               "GLiNER entities": ", ".join(
-                                   entity.get("text", "") for entity in item.get("entities", [])
-                               )} for item in cv_evidence]),
-                use_container_width=True, hide_index=True
+                pd.DataFrame([{
+                    "CV excerpt": item.get("text", ""),
+                    "Evidence type": item.get("evidence_type", "context"),
+                    "GLiNER entities": ", ".join(
+                        entity.get("text", "") for entity in item.get("entities", [])
+                    )
+                } for item in cv_evidence]),
+                use_container_width=True,
+                hide_index=True,
             )
 
     st.markdown("#### ⚖️ Algorithmic fairness screening")
     st.json({k: v for k, v in (bias_report or {}).items() if k != "match_details"})
-    st.caption("The fairness check is heuristic and limited to configured textual indicators. A 'Low' result does not establish that the model or recruitment process is fair.")
+    st.caption("The fairness check is heuristic and limited to configured textual indicators. A 'Low' result does not establish that the process is fair.")
 
 
 if menu == "Manage Jobs":
@@ -191,21 +216,17 @@ elif menu == "Evaluate Candidates":
                             f"Processed: {data['full_name']} | Weighted compatibility: {data['match_score']}%"
                         )
                         summary = data.get("evaluation_summary", {})
-                        context_count = summary.get("evidence_covered_count", 0)
+                        st.metric("Weighted compatibility", f"{data.get('match_score', 0):.2f}%")
+                        evidence_count = summary.get("evidence_covered_count", 0)
                         criteria_count = summary.get("requirements_count", 0)
-                        cols = st.columns(5)
-                        cols[0].metric(
-                            "Criteria with direct/partial evidence",
-                            f"{context_count}/{criteria_count}",
-                            help="Counts only Full Match and Partial Match criteria. Transferable Context is reported separately."
-                        )
+                        cols = st.columns(4)
+                        cols[0].metric("Evidence coverage", f"{evidence_count}/{criteria_count}")
                         cols[1].metric("Fully matched", summary.get("fully_matched", 0))
                         cols[2].metric("Partially matched", summary.get("partial_matches", 0))
-                        cols[3].metric("Transferable context", summary.get("transferable_contexts", 0))
-                        cols[4].metric("Missing", summary.get("missing", 0))
+                        cols[3].metric("Missing", summary.get("missing", 0))
                         required_cols = st.columns(2)
                         required_cols[0].metric(
-                            "Required without direct evidence",
+                            "Required without evidence",
                             summary.get("required_without_evidence", 0)
                         )
                         required_score = summary.get("required_only_score")
@@ -214,9 +235,9 @@ elif menu == "Evaluate Candidates":
                             f"{required_score}%" if required_score is not None else "N/A"
                         )
                         st.caption(
-                            "Weighted compatibility uses evidence points (100/50/25/0). Direct/partial "
-                            "evidence coverage counts only Full and Partial matches; Transferable Context "
-                            "is shown separately."
+                            f"Grouped {summary.get('source_statement_count', 0)} job-post statements "
+                            f"into {criteria_count} assessable criteria. Weighted compatibility uses "
+                            "Full = 80, Partial = 50, Missing = 0, with priority weights 3.0/1.5/1.0."
                         )
                     else:
                         st.error(f"Evaluation failed: {result.text}")
