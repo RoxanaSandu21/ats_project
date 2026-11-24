@@ -244,11 +244,7 @@ def _priority(text: str, criterion_type: str) -> Tuple[str, str]:
 
 
 def _requirement_group_key(requirement: dict) -> str:
-    """Group overlapping duties into a small set of assessable job capabilities.
-
-    This is task-level grouping, not a vocabulary of technical skills. Original
-    source statements remain attached to each group for traceability.
-    """
+    """Group overlapping duties into a small set of assessable job capabilities."""
     text = " ".join((
         requirement.get("requirement", ""),
         requirement.get("source_text", ""),
@@ -259,26 +255,37 @@ def _requirement_group_key(requirement: dict) -> str:
         return "language"
     if re.search(r"\b(work under pressure|pressure|fast[- ]paced)\b", text):
         return "working_under_pressure"
+    if re.search(r"\b(mailbox|ola|slas?|service level agreement)\b", text):
+        return "service_level_monitoring"
+
+    # Incident recording belongs with incident/service-request handling even
+    # when the ticket refers to a video-conference request.
+    if (
+        re.search(r"\b(record|recording|log|logging|tracking|track)\b", text)
+        and re.search(r"\b(incident|service request|ticket|request)\b", text)
+    ):
+        return "incident_and_troubleshooting"
+
     if re.search(r"\b(audio[- ]visual|\bav support\b|video conference|video conferencing)\b", text) or (
         "video" in text and "audio" in text
     ):
         return "audiovisual_support"
-    if re.search(r"\b(mailbox|ola|slas?|service level agreement)\b", text):
-        return "service_level_monitoring"
+
     if re.search(
         r"\b(end[- ]?users?|point of contact|first[- ]line support|room bookings?|"
-        r"users experiencing|user support|communication)\b",
+        r"users experiencing|user support|communication|first point of contact)\b",
         text,
     ):
         return "end_user_support"
+
     if re.search(
         r"\b(troubleshoot|incident|hardware|software|service requests?|"
-        r"first point of contact|logging|tracking|resolve|documentation|support environment)\b",
+        r"resolve|documentation|support environment)\b",
         text,
     ):
         return "incident_and_troubleshooting"
-    return "standalone:" + re.sub(r"\W+", " ", requirement.get("requirement", "").casefold()).strip()
 
+    return "standalone:" + re.sub(r"\W+", " ", requirement.get("requirement", "").casefold()).strip()
 
 _GROUP_LABELS = {
     "end_user_support": "End-user and first-line support",
@@ -931,6 +938,14 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
         )
         similarity_matrix = util.cos_sim(source_embeddings, evidence_embeddings)
         best_similarity_per_evidence, best_source_per_evidence = similarity_matrix.max(dim=0)
+        grouped_assessment_requirement = dict(req)
+        grouped_assessment_requirement["requirement"] = " ".join(
+            [req.get("requirement", "")]
+            + [
+                f"{item.get('requirement', '')} {item.get('source_text', '')}"
+                for item in source_details
+            ]
+        )
 
         candidate_indices = [
             index for index, item in enumerate(evidence)
@@ -946,11 +961,9 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
         else:
             assessed = {}
             for candidate_idx in candidate_indices:
-                source_index = int(best_source_per_evidence[candidate_idx].item())
-                source_requirement = source_details[source_index]
                 candidate_similarity = float(best_similarity_per_evidence[candidate_idx].item())
                 assessed[candidate_idx] = _assess_evidence(
-                    source_requirement,
+                    grouped_assessment_requirement,
                     evidence[candidate_idx],
                     candidate_similarity,
                     entity_embeddings,
