@@ -21,9 +21,9 @@ def show_evaluation_details(bias_report, weighted_score=None):
     criteria_count = details.get("requirements_count", 0)
     cols = st.columns(5)
     cols[0].metric(
-        "Criteria with any context",
+        "Criteria with direct/partial evidence",
         f"{context_count}/{criteria_count}",
-        help="Counts Full Match, Partial Match, and Transferable Context criteria. This is a count of retrieved context, not a compatibility percentage."
+        help="Counts only Full Match and Partial Match criteria. Transferable Context is shown separately because it is not direct evidence."
     )
     cols[1].metric("Fully matched", details.get("fully_matched", 0))
     cols[2].metric("Partially matched", details.get("partial_matches", 0))
@@ -43,7 +43,7 @@ def show_evaluation_details(bias_report, weighted_score=None):
     st.caption(
         "Weighted compatibility uses 100 points for Full Match, 50 for Partial Match, "
         "25 for Transferable Context, and 0 for Missing, divided by the total criterion "
-        "weights. Criteria with any context is only a count; it does not measure evidence strength."
+        "weights. Criteria with direct/partial evidence is only a count; it does not measure evidence strength."
     )
 
     st.caption(details.get("explanation", "No evaluation explanation available."))
@@ -185,9 +185,9 @@ elif menu == "Evaluate Candidates":
                         criteria_count = summary.get("requirements_count", 0)
                         cols = st.columns(5)
                         cols[0].metric(
-                            "Criteria with any context",
+                            "Criteria with direct/partial evidence",
                             f"{context_count}/{criteria_count}",
-                            help="Counts Full Match, Partial Match, and Transferable Context criteria. This is not a compatibility percentage."
+                            help="Counts only Full Match and Partial Match criteria. Transferable Context is reported separately."
                         )
                         cols[1].metric("Fully matched", summary.get("fully_matched", 0))
                         cols[2].metric("Partially matched", summary.get("partial_matches", 0))
