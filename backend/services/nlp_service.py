@@ -760,10 +760,35 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
         return "none"
 
     if "network" in requirement:
-        return "direct" if has((
-            r"\b(network|networking|tcp/?ip|dns|dhcp|router|switch|lan|wan)\b",
-            r"\b(firewall|vpn|subnet|ethernet|wi[ -]?fi|wireless|osi model)\b",
-        )) else "none"
+        network_mention = has((
+            r"\b(networking|computer network|tcp/?ip|dns|dhcp|router|switch|lan|wan)\b",
+            r"\b(firewall|vpn|subnet|ethernet|wi[ -]?fi|wireless|osi model|network connectivity)\b",
+        ))
+        network_action = (
+            r"\b(configur(?:e|es|ed|ing)|administer(?:s|ed|ing)|troubleshoot(?:s|ed|ing)?|"
+            r"diagnos(?:e|es|ed|ing)|monitor(?:s|ed|ing)?|manag(?:e|es|ed|ing)|"
+            r"maintain(?:s|ed|ing)?|install(?:s|ed|ing)?|secur(?:e|es|ed|ing)|"
+            r"design(?:s|ed|ing)|deploy(?:s|ed|ing)|set ?up)\b"
+        )
+        network_object = (
+            r"\b(tcp/?ip|dns|dhcp|routers?|switches|lan|wan|firewalls?|vpns?|"
+            r"subnets?|ethernet|wi[ -]?fi|wireless|osi model|network connectivity)\b"
+        )
+        network_task = bool(
+            re.search(
+                rf"{network_action}[\s\S]{{0,80}}{network_object}|"
+                rf"{network_object}[\s\S]{{0,80}}{network_action}",
+                text,
+                re.IGNORECASE,
+            )
+        )
+        if network_task:
+            return "direct"
+        if network_mention and evidence.get("evidence_type") in (
+            "skills_list", "experience_context", "context_window"
+        ):
+            return "contextual"
+        return "none"
 
     if "mailbox" in requirement or "ola" in requirement or "sla" in requirement:
         service_level_mention = has((
