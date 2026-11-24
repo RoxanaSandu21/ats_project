@@ -935,11 +935,25 @@ def _assess_evidence(
     if support_level == "direct":
         quote = (evidence.get("quote") or evidence.get("text") or "").casefold()
         requirement_text = requirement.get("requirement", "").casefold()
+        # Grouped labels (e.g. "Language proficiency") can hide qualifiers
+        # from the original job post (e.g. "spoken and written"). Preserve and
+        # inspect those source statements when applying criterion-specific rules.
+        original_requirement_text = " ".join(
+            [requirement_text]
+            + list(requirement.get("source_statements", []))
+            + [
+                f"{item.get('requirement', '')} {item.get('source_text', '')}"
+                for item in requirement.get("source_details", [])
+            ]
+        ).casefold()
 
-        if "english" in requirement_text:
+        if "english" in original_requirement_text or "language proficiency" in requirement_text:
             speaks = bool(re.search(r"\b(spoken|speaking)\b", quote))
             writes = bool(re.search(r"\b(written|writing)\b", quote))
-            asks_both = "spoken" in requirement_text and "written" in requirement_text
+            asks_both = (
+                re.search(r"\bspoken\b", original_requirement_text)
+                and re.search(r"\bwritten\b", original_requirement_text)
+            )
             if asks_both and not (speaks and writes):
                 return "Partial Match", "explicit_english_level_but_modes_not_both_proven", 60.0
             if asks_both and speaks and writes:
