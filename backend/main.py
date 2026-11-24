@@ -81,7 +81,7 @@ def upload_cv(job_id: int, file: UploadFile = File(...), db: Session = Depends(g
         key: result.get(key) for key in (
             "explanation", "match_results", "requirements", "excluded_job_information", "cv_evidence",
             "evidence_coverage", "evidence_covered_count", "requirements_count",
-            "fully_matched", "partial_matches", "missing",
+            "fully_matched", "partial_matches", "transferable_contexts", "missing",
             "required_without_evidence", "required_only_score", "required_count"
         )
     }
@@ -100,6 +100,7 @@ def upload_cv(job_id: int, file: UploadFile = File(...), db: Session = Depends(g
         "evaluation_summary": {
             "evidence_coverage": result.get("evidence_coverage", 0),
             "fully_matched": result.get("fully_matched", 0),
+            "transferable_contexts": result.get("transferable_contexts", 0),
             "required_without_evidence": result.get("required_without_evidence", 0),
             "required_only_score": result.get("required_only_score")
         }
