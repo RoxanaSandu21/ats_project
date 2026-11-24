@@ -8,6 +8,7 @@ from services.nlp_service import (
     _evidence_support_level,
     _group_job_requirements,
     _priority,
+    calculate_hybrid_match_score,
     extract_cv_evidence,
 )
 
@@ -128,6 +129,87 @@ class OllamaParityEvidenceTests(unittest.TestCase):
             {"score": 0, "priority": "unspecified"},
         ]
         self.assertEqual(_calculate_weighted_match_score(details), 18.18)
+
+    def test_grouped_compatibility_matches_ollama_reference_case(self):
+        import torch
+
+        raw_requirements = [
+            make_requirement(
+                "Act as an initial point of contact for all end-user support requirements;"
+            ),
+            make_requirement(
+                "You will troubleshoot hardware and software problems, manage service requests, and maintain comprehensive documentation."
+            ),
+            make_requirement("Provide video and audio 1st line support services"),
+            make_requirement("Monitor mailbox following OLA's and SLA's."),
+            make_requirement(
+                "Excellent understanding of English – spoken and written;",
+                category="language",
+                criterion_type="qualification",
+            ),
+            make_requirement(
+                "Ability to work under pressure;",
+                category="soft skill",
+                criterion_type="qualification",
+            ),
+        ]
+        grouped = _group_job_requirements(raw_requirements)
+        evidence = [
+            {
+                "text": "Business Sales Advisor February 2025 – September 2025",
+                "quote": "Business Sales Advisor February 2025 – September 2025",
+                "label": "CV context excerpt",
+                "type": "experience_context",
+                "evidence_type": "experience_context",
+                "entities": [],
+            },
+            {
+                "text": (
+                    "Developed a mobile application that helps users monitor and improve "
+                    "their basic needs through real-time feedback."
+                ),
+                "quote": (
+                    "Developed a mobile application that helps users monitor and improve "
+                    "their basic needs through real-time feedback."
+                ),
+                "label": "English-language resume excerpt",
+                "type": "language_context",
+                "evidence_type": "language_context",
+                "is_english_writing_sample": True,
+                "entities": [],
+            },
+        ]
+
+        class FixedEmbeddingModel:
+            def encode(self, texts, **kwargs):
+                return torch.ones((len(texts), 8), dtype=torch.float32)
+
+        with patch(
+            "services.nlp_service.extract_job_criteria",
+            return_value=(grouped, []),
+        ):
+            with patch(
+                "services.nlp_service.extract_cv_evidence",
+                return_value=evidence,
+            ):
+                with patch(
+                    "services.nlp_service.embedding_model",
+                    FixedEmbeddingModel(),
+                ):
+                    result = calculate_hybrid_match_score(
+                        "IT Support with English",
+                        "A source-grounded English resume with a Business Sales Advisor role.",
+                    )
+
+        self.assertEqual(result["requirements_count"], 6)
+        self.assertEqual(result["source_statement_count"], 6)
+        self.assertEqual(result["partial_matches"], 2)
+        self.assertEqual(result["fully_matched"], 0)
+        self.assertEqual(result["missing"], 4)
+        self.assertEqual(result["evidence_covered_count"], 2)
+        self.assertEqual(result["required_count"], 5)
+        self.assertEqual(result["required_only_score"], 20.0)
+        self.assertEqual(result["score"], 18.18)
 
     def test_sales_advisor_is_contextual_for_end_user_communication(self):
         evidence = {
