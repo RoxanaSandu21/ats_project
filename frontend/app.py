@@ -20,7 +20,6 @@ def show_evaluation_details(bias_report):
     cols[2].metric("Required without direct evidence", details.get("required_without_evidence", 0))
     required_score = details.get("required_only_score")
     cols[3].metric("Required-only score", f"{required_score}%" if required_score is not None else "N/A")
-                        cols[4].metric("Transferable context", summary.get("transferable_contexts", 0))
     cols[4].metric("Transferable context", details.get("transferable_contexts", 0))
 
     st.caption(details.get("explanation", "No evaluation explanation available."))
@@ -164,6 +163,7 @@ elif menu == "Evaluate Candidates":
                         cols[2].metric("Required without direct evidence", summary.get("required_without_evidence", 0))
                         required_score = summary.get("required_only_score")
                         cols[3].metric("Required-only score", f"{required_score}%" if required_score is not None else "N/A")
+                        cols[4].metric("Transferable context", summary.get("transferable_contexts", 0))
                     else:
                         st.error(f"Evaluation failed: {result.text}")
                 except requests.RequestException as exc:
