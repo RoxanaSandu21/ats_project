@@ -445,15 +445,29 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
             total_weight += weight
             continue
 
+        # Assess every substantive passage before selecting evidence. A weaker
+        # similarity result with direct entity support should outrank an unrelated
+        # passage with a slightly higher embedding score.
+        assessed = {}
+        for candidate_idx in candidate_indices:
+            candidate_similarity = float(similarities[candidate_idx].item())
+            assessed[candidate_idx] = _assess_evidence(
+                req, evidence[candidate_idx], candidate_similarity
+            )
+
+        status_rank = {"Full Match": 2, "Partial Match": 1, "Missing": 0}
         ranked = sorted(
             candidate_indices,
-            key=lambda index: float(similarities[index].item()),
+            key=lambda index: (
+                status_rank[assessed[index][0]],
+                float(similarities[index].item())
+            ),
             reverse=True
         )[:3]
         best_idx = ranked[0]
         best_similarity = float(similarities[best_idx].item())
         best_evidence = evidence[best_idx]
-        status, evidence_strength, points = _assess_evidence(req, best_evidence, best_similarity)
+        status, evidence_strength, points = assessed[best_idx]
 
         weight = 1.0 if req["priority"] == "required" else (
             0.5 if req["priority"] == "preferred" else 1.0
