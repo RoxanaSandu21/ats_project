@@ -50,13 +50,15 @@ ACTION_CUES = (
     "improved", "deployed", "analysed", "analyzed"
 )
 
-PREFERRED_CUES = (
-    "nice to have", "preferred", "desirable", "bonus", "advantage",
-    "would be a plus", "ideally", "optional"
+PREFERRED_PATTERN = re.compile(
+    r"\\b(?:preferred|desirable|bonus|advantage|ideally|optional)\\b|"
+    r"nice to have|would be a plus",
+    re.IGNORECASE
 )
-REQUIRED_CUES = (
-    "must", "required", "requirement", "essential", "mandatory",
-    "we require", "minimum"
+REQUIRED_PATTERN = re.compile(
+    r"\\b(?:must|required|essential|mandatory|minimum)\\b|"
+    r"we require|you are required",
+    re.IGNORECASE
 )
 
 
@@ -212,13 +214,14 @@ def _criterion_type(text: str, category: str) -> str:
 
 
 def _priority(text: str, criterion_type: str) -> Tuple[str, str]:
-    lowered = text.casefold()
-    if any(term in lowered for term in PREFERRED_CUES):
+    if PREFERRED_PATTERN.search(text):
         return "preferred", "explicit wording"
-    if any(term in lowered for term in REQUIRED_CUES):
+    if REQUIRED_PATTERN.search(text):
         return "required", "explicit wording"
     # A stated qualification (e.g. English proficiency or troubleshooting
     # experience) is treated as required unless the advert marks it preferred.
+    # Generic plural wording such as "support requirements" is not an explicit
+    # priority signal and must not accidentally mark a criterion as required.
     if criterion_type == "qualification":
         return "required", "inferred from qualification wording"
     return "unspecified", "not stated in the advert"
