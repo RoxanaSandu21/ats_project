@@ -823,7 +823,7 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
 
 
 TECHNICAL_ENTITY_TYPES = {
-    "technical skill", "software", "tool", "methodology",
+    "technical skill", "software", "tool", "methodology", "language",
 }
 
 
