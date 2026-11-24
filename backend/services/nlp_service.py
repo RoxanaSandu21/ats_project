@@ -51,12 +51,12 @@ ACTION_CUES = (
 )
 
 PREFERRED_PATTERN = re.compile(
-    r"\\b(?:preferred|desirable|bonus|advantage|ideally|optional)\\b|"
+    r"\b(?:preferred|desirable|bonus|advantage|ideally|optional)\\b|"
     r"nice to have|would be a plus",
     re.IGNORECASE
 )
 REQUIRED_PATTERN = re.compile(
-    r"\\b(?:must|required|essential|mandatory|minimum)\\b|"
+    r"\b(?:must|required|essential|mandatory|minimum)\\b|"
     r"we require|you are required",
     re.IGNORECASE
 )
