@@ -11,11 +11,14 @@ st.write("Master's Project — GLiNER extraction, contextual semantic retrieval,
 menu = st.sidebar.selectbox("Navigation", ["Manage Jobs", "Evaluate Candidates"])
 
 
-def show_evaluation_details(bias_report, weighted_score=None):
+def show_evaluation_details(bias_report, weighted_score=None, ollama_score=None):
     details = (bias_report or {}).get("match_details", {})
     st.markdown("#### 📊 Evaluation overview")
     if weighted_score is not None:
-        st.metric("Weighted compatibility", f"{weighted_score:.2f}%")
+        st.metric("Normalized weighted compatibility", f"{weighted_score:.2f}%")
+    raw_score = details.get("ollama_compatible_score", ollama_score)
+    if raw_score is not None:
+        st.caption(f"Ollama-compatible weighted points: {raw_score:.2f} / 80")
 
     results = details.get("match_results", [])
     if results:
@@ -41,17 +44,24 @@ def show_evaluation_details(bias_report, weighted_score=None):
 
     required_cols = st.columns(2)
     required_cols[0].metric("Required without evidence", details.get("required_without_evidence", 0))
-    required_score = details.get("required_only_score")
+    required_score = details.get("required_only_percent")
+    if required_score is None:
+        raw_required_score = details.get("required_only_score")
+        required_score = (
+            round(float(raw_required_score) / 80.0 * 100.0, 2)
+            if raw_required_score is not None else None
+        )
     required_cols[1].metric(
-        "Required-only score",
-        f"{required_score}%" if required_score is not None else "N/A"
+        "Required-only compatibility",
+        f"{required_score:.2f}%" if required_score is not None else "N/A"
     )
 
     st.caption(
-        "Weighted compatibility uses the same weighting model as the Ollama prototype: "
-        "Full Match = 80 points, Partial Match = 50 points, Missing = 0; required criteria "
-        "weigh 3.0, preferred/unspecified 1.5, and nice-to-have 1.0. Partial matches may "
-        "use transferable evidence, but the explanation distinguishes it from direct experience."
+        "Normalized compatibility = weighted Ollama-compatible points ÷ 80 × 100. "
+        "The underlying point scale is Full Match = 80, Partial Match = 50 "
+        "(or 60 for one-mode English evidence), Missing = 0; required criteria "
+        "weigh 3.0, preferred/unspecified 1.5, and nice-to-have 1.0. "
+        "A normalized 100% means every criterion received the maximum 80 points."
     )
     if source_count:
         st.caption(
@@ -216,7 +226,14 @@ elif menu == "Evaluate Candidates":
                             f"Processed: {data['full_name']} | Weighted compatibility: {data['match_score']}%"
                         )
                         summary = data.get("evaluation_summary", {})
-                        st.metric("Weighted compatibility", f"{data.get('match_score', 0):.2f}%")
+                        st.metric(
+                            "Normalized weighted compatibility",
+                            f"{data.get('match_score', 0):.2f}%"
+                        )
+                        st.caption(
+                            f"Ollama-compatible weighted points: "
+                            f"{data.get('ollama_compatible_score', 0):.2f} / 80"
+                        )
                         evidence_count = summary.get("evidence_covered_count", 0)
                         criteria_count = summary.get("requirements_count", 0)
                         cols = st.columns(4)
@@ -229,15 +246,15 @@ elif menu == "Evaluate Candidates":
                             "Required without evidence",
                             summary.get("required_without_evidence", 0)
                         )
-                        required_score = summary.get("required_only_score")
+                        required_score = summary.get("required_only_percent")
                         required_cols[1].metric(
-                            "Required-only score",
-                            f"{required_score}%" if required_score is not None else "N/A"
+                            "Required-only compatibility",
+                            f"{required_score:.2f}%" if required_score is not None else "N/A"
                         )
                         st.caption(
                             f"Grouped {summary.get('source_statement_count', 0)} job-post statements "
-                            f"into {criteria_count} assessable criteria. Weighted compatibility uses "
-                            "Full = 80, Partial = 50, Missing = 0, with priority weights 3.0/1.5/1.0."
+                            f"into {criteria_count} assessable criteria. The normalized percentage "
+                            "uses the Ollama-compatible 0–80 weighted point scale."
                         )
                     else:
                         st.error(f"Evaluation failed: {result.text}")
@@ -256,10 +273,16 @@ elif menu == "Evaluate Candidates":
                 for index, candidate in enumerate(leaderboard, 1):
                     score = candidate.get("match_score", 0)
                     color = "🟢" if score >= 75 else "🟡" if score >= 50 else "🔴"
-                    with st.expander(f"#{index} — {candidate.get('full_name', 'Unknown')} {color} ({score}%)"):
+                    with st.expander(
+                        f"#{index} — {candidate.get('full_name', 'Unknown')} {color} ({score:.2f}%)"
+                    ):
                         st.caption(f"Last evaluated: {candidate.get('submitted_at', 'Unknown')}")
                         st.write(f"**Contact:** {candidate.get('email', 'Unspecified')} | {candidate.get('phone', 'Unspecified')}")
-                        show_evaluation_details(candidate.get("bias_report", {}), candidate.get("match_score"))
+                        show_evaluation_details(
+                            candidate.get("bias_report", {}),
+                            candidate.get("match_score"),
+                            candidate.get("ollama_compatible_score"),
+                        )
             else:
                 st.info("No candidates have been evaluated for this job yet.")
         except requests.RequestException as exc:
