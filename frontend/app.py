@@ -31,6 +31,8 @@ def show_evaluation_details(bias_report):
             priority = item.get("priority", "unspecified").title()
             with st.expander(f"{icon} {index}. {item.get('requirement', 'Criterion')} — {status} ({priority})"):
                 st.write(f"**Category:** {item.get('category', 'Not classified')}")
+                st.write(f"**Criterion type:** {item.get('criterion_type', 'Not classified')}")
+                st.write(f"**Priority source:** {item.get('priority_source', 'Not stated')}")
                 st.write(f"**Semantic retrieval similarity:** {item.get('confidence', 0)}%")
                 st.write(f"**Evidence assessment:** {item.get('evidence_strength', 'Not available')}")
                 excerpt = item.get("cv_evidence", "")
@@ -49,13 +51,24 @@ def show_evaluation_details(bias_report):
     requirements = details.get("requirements", [])
     if requirements:
         with st.expander("📌 Extracted job criteria"):
-            st.dataframe(pd.DataFrame(requirements), use_container_width=True, hide_index=True)
+            display_requirements = [{
+                **item,
+                "entities": ", ".join(entity.get("text", "") for entity in item.get("entities", []))
+            } for item in requirements]
+            st.dataframe(pd.DataFrame(display_requirements), use_container_width=True, hide_index=True)
+
+    excluded = details.get("excluded_job_information", [])
+    if excluded:
+        with st.expander("🚫 Excluded job-post information (not scored)"):
+            st.caption("These statements describe employer-provided benefits or compensation, not candidate qualifications or responsibilities.")
+            st.dataframe(pd.DataFrame(excluded), use_container_width=True, hide_index=True)
 
     cv_evidence = details.get("cv_evidence", [])
     if cv_evidence:
         with st.expander("📄 Extracted CV context"):
             st.dataframe(
                 pd.DataFrame([{"CV excerpt": item.get("text", ""),
+                               "Evidence type": item.get("evidence_type", "context"),
                                "GLiNER entities": ", ".join(
                                    entity.get("text", "") for entity in item.get("entities", [])
                                )} for item in cv_evidence]),
