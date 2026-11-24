@@ -154,9 +154,13 @@ def show_evaluation_details(bias_report, weighted_score=None, ollama_score=None)
                 hide_index=True,
             )
 
-    st.markdown("#### ⚖️ Algorithmic fairness screening")
+    st.markdown("#### ⚖️ Bias-indicator scan (limited heuristic)")
     st.json({k: v for k, v in (bias_report or {}).items() if k != "match_details"})
-    st.caption("The fairness check is heuristic and limited to configured textual indicators. A 'Low' result does not establish that the process is fair.")
+    st.caption(
+        "This detector currently searches CV text for photo references and marital/family terms only. "
+        "It does not measure disparate impact, infer protected characteristics, or establish that the "
+        "recruitment process or scoring model is fair. 'Low' means no configured text indicators were found."
+    )
 
 
 if menu == "Manage Jobs":
