@@ -733,13 +733,25 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
     ):
         av_mention = has((
             r"\b(audio[- ]visual|a/v|av equipment|video conferencing|video conference)\b",
-            r"\b(projector|microphone|conference room|display setup|sound system)\b",
+            r"\b(projector|microphone|display setup|sound system|conference room "
+            r"(?:av )?(?:equipment|system|setup|hardware))\b",
         ))
-        av_activity = has((
+        # Keep the activity and AV object close together. A CV paragraph that
+        # separately mentions "managed a team" and "conference room" should
+        # not become proof of AV support.
+        av_action = (
             r"\b(set ?up|configured|programmed|tested|monitored|operated|supported|"
-            r"troubleshot|installed|maintained|prepared|provided|coordinated|managed)\b",
-        ))
-        if av_mention and av_activity:
+            r"troubleshot|installed|maintained|prepared|provided|coordinated|managed)\b"
+        )
+        av_object = (
+            r"\b(audio[- ]visual|a/v|av equipment|video conferencing|video conference|"
+            r"projector|microphone|display setup|sound system|conference room "
+            r"(?:av )?(?:equipment|system|setup|hardware))\b"
+        )
+        av_task = bool(
+            re.search(rf"{av_action}[\\s\\S]{{0,80}}{av_object}|{av_object}[\\s\\S]{{0,80}}{av_action}", text, re.IGNORECASE)
+        )
+        if av_mention and av_task:
             return "direct"
         if av_mention and evidence.get("evidence_type") in (
             "skills_list", "experience_context", "context_window"
@@ -758,11 +770,23 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
             r"\b(shared )?mailboxes?\b|\b(?:ola|sla)s?\b|"
             r"\bservice level agreements?\b|\bservice levels?\b",
         ))
-        service_level_activity = has((
+        service_level_action = (
             r"\b(manag(?:e|es|ed|ing)|monitor(?:s|ed|ing)?|track(?:s|ed|ing)?|"
             r"follow(?:s|ed|ing)?|maintain(?:s|ed|ing)?|review(?:s|ed|ing)?|"
-            r"administer(?:s|ed|ing)?|measur(?:e|es|ed|ing))\b",
-        ))
+            r"administer(?:s|ed|ing)?|measur(?:e|es|ed|ing))\b"
+        )
+        service_level_object = (
+            r"\b(shared )?mailboxes?\b|\b(?:ola|sla)s?\b|"
+            r"\bservice level agreements?\b|\bservice levels?\b"
+        )
+        service_level_activity = bool(
+            re.search(
+                rf"{service_level_action}[\\s\\S]{{0,60}}{service_level_object}|"
+                rf"{service_level_object}[\\s\\S]{{0,60}}{service_level_action}",
+                text,
+                re.IGNORECASE,
+            )
+        )
         if service_level_mention and service_level_activity:
             return "direct"
         if service_level_mention and evidence.get("evidence_type") in (
@@ -833,8 +857,8 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
             r"\binteract(?:ed|ing)\s+with\s+(?:end[- ]?users?|users?|customers?|clients?)\b",
             r"\b(taught|teaching|advised|assisted|supported|helped|served)\s+"
             r"(?:students|customers|clients|users|end[- ]?users)\b",
-            r"\b(handled|answered|resolved)\s+(?:customer|client|user)\s+"
-            r"(?:questions|inquiries|calls|requests|issues)\b",
+            r"\b(handled|answered|resolved|processed)\s+(?:customer|client|user|end[- ]?user)\s+"
+            r"(?:questions|inquiries|calls|requests|issues|tickets)\b",
             r"\bprovided\s+(?:technical\s+)?(?:support|assistance|guidance)\s+to\s+"
             r"(?:users|customers|clients|end[- ]?users)\b",
         )):
