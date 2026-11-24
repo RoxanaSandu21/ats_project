@@ -544,6 +544,42 @@ class OllamaParityEvidenceTests(unittest.TestCase):
             "none",
         )
 
+    def test_social_networking_project_does_not_prove_computer_networking(self):
+        evidence = {
+            "label": "Project responsibility",
+            "quote": "Built a social networking application for students.",
+            "text": "Built a social networking application for students.",
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(
+            _evidence_support_level("Basic networking skills", evidence),
+            "none",
+        )
+
+    def test_network_configuration_task_is_direct_evidence(self):
+        evidence = {
+            "label": "IT operations responsibility",
+            "quote": "Configured routers, switches and DNS records for office LAN connectivity.",
+            "text": "Configured routers, switches and DNS records for office LAN connectivity.",
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(
+            _evidence_support_level("Basic networking skills", evidence),
+            "direct",
+        )
+
+    def test_networking_skill_list_is_contextual_not_direct_task_evidence(self):
+        evidence = {
+            "label": "Technical Skills",
+            "quote": "Networking, TCP/IP, DNS, DHCP",
+            "text": "Networking, TCP/IP, DNS, DHCP",
+            "evidence_type": "skills_list",
+        }
+        self.assertEqual(
+            _evidence_support_level("Basic networking skills", evidence),
+            "contextual",
+        )
+
     def test_mailbox_or_sla_mention_without_monitoring_is_not_direct_evidence(self):
         evidence = {
             "label": "Tools and responsibilities",
