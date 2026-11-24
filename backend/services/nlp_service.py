@@ -847,32 +847,44 @@ def _calculate_weighted_match_score(requirement_details: List[dict]) -> float:
     return round(weighted_total / total_weight, 2) if total_weight else 0.0
 
 def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
-    """Evaluate complete job criteria against contextual CV passages."""
-    if not cv_text.strip():
+    """Group related job duties, retrieve CV evidence, and score with Ollama-compatible weights."""
+    if not cv_text or not cv_text.strip():
         return {
-            "score": 0.0, "match_results": [], "requirements": [],
-            "excluded_job_information": [], "cv_evidence": [],
-            "explanation": "Empty CV text."
+            "score": 0.0,
+            "match_results": [],
+            "requirements": [],
+            "excluded_job_information": [],
+            "cv_evidence": [],
+            "explanation": "Empty CV text.",
         }
 
     requirements, excluded = extract_job_criteria(job_description)
     evidence = extract_cv_evidence(cv_text)
     if not requirements:
         return {
-            "score": 0.0, "match_results": [], "requirements": [],
-            "excluded_job_information": excluded, "cv_evidence": evidence,
-            "explanation": "No assessable job criteria could be extracted."
+            "score": 0.0,
+            "match_results": [],
+            "requirements": [],
+            "excluded_job_information": excluded,
+            "cv_evidence": evidence,
+            "explanation": "No assessable job criteria could be extracted.",
         }
     if not evidence:
         return {
-            "score": 0.0, "match_results": [], "requirements": requirements,
-            "excluded_job_information": excluded, "cv_evidence": [],
-            "explanation": "No usable CV text was extracted."
+            "score": 0.0,
+            "match_results": [],
+            "requirements": requirements,
+            "excluded_job_information": excluded,
+            "cv_evidence": [],
+            "explanation": "No usable CV text was extracted.",
         }
 
     evidence_texts = [item["text"] for item in evidence]
     evidence_embeddings = embedding_model.encode(
-        evidence_texts, convert_to_tensor=True, normalize_embeddings=True
+        evidence_texts,
+        convert_to_tensor=True,
+        normalize_embeddings=True,
+        show_progress_bar=False,
     )
 
     entity_terms = list(dict.fromkeys(
@@ -884,172 +896,185 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
     entity_indices = {term: index for index, term in enumerate(entity_terms)}
     entity_embeddings = (
         embedding_model.encode(
-            entity_terms, convert_to_tensor=True, normalize_embeddings=True
+            entity_terms,
+            convert_to_tensor=True,
+            normalize_embeddings=True,
+            show_progress_bar=False,
         )
         if entity_terms else None
     )
 
     requirement_details = []
-    weighted_total = total_weight = 0.0
-    required_total = required_weight = 0.0
-    fully_matched = partial = transferable = missing = required_without_evidence = 0
+    required_total = 0.0
+    required_count = 0
+    fully_matched = partial = missing = required_without_evidence = 0
     evidence_covered = 0
 
     for req in requirements:
-        req_embedding = embedding_model.encode(
-            req["requirement"], convert_to_tensor=True, normalize_embeddings=True
+        source_details = req.get("source_details") or [{
+            "requirement": req["requirement"],
+            "source_text": req.get("source_text", req["requirement"]),
+            "category": req.get("category", "job criterion"),
+            "criterion_type": req.get("criterion_type", "job criterion"),
+            "priority": req.get("priority", "unspecified"),
+            "entities": req.get("entities", []),
+        }]
+        source_texts = [
+            item.get("requirement") or item.get("source_text") or req["requirement"]
+            for item in source_details
+        ]
+        source_embeddings = embedding_model.encode(
+            source_texts,
+            convert_to_tensor=True,
+            normalize_embeddings=True,
+            show_progress_bar=False,
         )
-        similarities = util.cos_sim(req_embedding, evidence_embeddings)[0]
+        similarity_matrix = util.cos_sim(source_embeddings, evidence_embeddings)
+        best_similarity_per_evidence, best_source_per_evidence = similarity_matrix.max(dim=0)
 
-        # Headings and titles can be useful context, but they are not competence evidence.
         candidate_indices = [
             index for index, item in enumerate(evidence)
             if item.get("evidence_type") != "heading_or_title"
         ]
         if not candidate_indices:
-            requirement_details.append({
-                "requirement": req["requirement"],
-                "category": req["category"],
-                "criterion_type": req["criterion_type"],
-                "priority": req["priority"],
-                "priority_source": req["priority_source"],
-                "status": "Missing",
-                "confidence": 0.0,
-                "evidence_strength": "no_substantive_cv_passage",
-                "cv_evidence": "",
-                "evidence_note": "Only headings or titles were available; they are not treated as evidence of competence.",
-                "alternative_evidence": []
-            })
-            missing += 1
-            if req["priority"] == "required":
-                required_without_evidence += 1
-                required_weight += 1
-            weight = 0.5 if req["priority"] == "preferred" else 1.0
-            total_weight += weight
-            continue
+            status, strength, points = "Missing", "no_substantive_cv_passage", 0.0
+            best_idx = None
+            best_similarity = 0.0
+            best_evidence = None
+            closest_evidence = None
+            ranked = []
+        else:
+            assessed = {}
+            for candidate_idx in candidate_indices:
+                source_index = int(best_source_per_evidence[candidate_idx].item())
+                source_requirement = source_details[source_index]
+                candidate_similarity = float(best_similarity_per_evidence[candidate_idx].item())
+                assessed[candidate_idx] = _assess_evidence(
+                    source_requirement,
+                    evidence[candidate_idx],
+                    candidate_similarity,
+                    entity_embeddings,
+                    entity_indices,
+                )
 
-        # Assess every substantive passage before selecting evidence. A weaker
-        # similarity result with direct entity support should outrank an unrelated
-        # passage with a slightly higher embedding score.
-        assessed = {}
-        for candidate_idx in candidate_indices:
-            candidate_similarity = float(similarities[candidate_idx].item())
-            assessed[candidate_idx] = _assess_evidence(
-                req, evidence[candidate_idx], candidate_similarity,
-                entity_embeddings, entity_indices
+            status_rank = {"Full Match": 2, "Partial Match": 1, "Missing": 0}
+            ranked = sorted(
+                candidate_indices,
+                key=lambda index: (
+                    status_rank[assessed[index][0]],
+                    float(best_similarity_per_evidence[index].item()),
+                ),
+                reverse=True,
             )
+            best_idx = ranked[0]
+            best_similarity = float(best_similarity_per_evidence[best_idx].item())
+            best_evidence = evidence[best_idx]
+            status, strength, points = assessed[best_idx]
 
-        status_rank = {"Full Match": 3, "Partial Match": 2, "Transferable Context": 1, "Missing": 0}
-        ranked = sorted(
-            candidate_indices,
-            key=lambda index: (
-                status_rank[assessed[index][0]],
-                float(similarities[index].item())
-            ),
-            reverse=True
-        )[:3]
-        best_idx = ranked[0]
-        best_similarity = float(similarities[best_idx].item())
-        best_evidence = evidence[best_idx]
-        status, evidence_strength, points = assessed[best_idx]
+            closest_idx = max(
+                candidate_indices,
+                key=lambda index: float(best_similarity_per_evidence[index].item()),
+            )
+            closest_evidence = evidence[closest_idx]
 
-        closest_idx = max(
-            candidate_indices,
-            key=lambda index: float(similarities[index].item())
-        )
-        closest_evidence = evidence[closest_idx]
-        closest_similarity = float(similarities[closest_idx].item())
-
-        weight = 1.0 if req["priority"] == "required" else (
-            0.5 if req["priority"] == "preferred" else 1.0
-        )
-        weighted_total += points * weight
-        total_weight += weight
-        if req["priority"] == "required":
+        weight = PRIORITY_WEIGHTS.get(req.get("priority", "unspecified"), 1.5)
+        if req.get("priority") == "required":
             required_total += points
-            required_weight += 1
-            if status in ("Missing", "Transferable Context"):
-                # Transferable context is not direct evidence of a required criterion.
+            required_count += 1
+            if status == "Missing":
                 required_without_evidence += 1
+
         if status == "Full Match":
             fully_matched += 1
         elif status == "Partial Match":
             partial += 1
-        elif status == "Transferable Context":
-            transferable += 1
         else:
             missing += 1
-        # Direct/partial evidence coverage excludes Transferable Context.
-        # Transferable passages are counted separately and still contribute
-        # only their reduced 25-point value to the compatibility score.
+
         if status in ("Full Match", "Partial Match"):
             evidence_covered += 1
 
         alternatives = []
-        for index in ranked[1:]:
+        for index in ranked[1:4]:
             alternatives.append({
                 "text": evidence[index]["text"],
-                "evidence_type": evidence[index]["evidence_type"],
-                "similarity": round(float(similarities[index].item()), 3)
+                "evidence_type": evidence[index].get("evidence_type", "context"),
+                "similarity": round(float(best_similarity_per_evidence[index].item()), 3),
             })
+
+        if status == "Full Match":
+            note = "Direct, source-grounded evidence supports this criterion. Review the excerpt to confirm its scope."
+        elif strength == "contextual_transferable_evidence":
+            note = (
+                "This is transferable context, not direct proof of the exact job task. "
+                "For example, customer-facing work supports communication, while an English CV supports written English only."
+            )
+        elif strength == "explicit_english_level_but_modes_not_both_proven":
+            note = "The CV states an English level, but does not separately establish both spoken and written proficiency."
+        elif status == "Partial Match":
+            note = "The CV supports part of this criterion, but does not establish the full requested depth or responsibility."
+        else:
+            note = "No sufficiently relevant source-grounded evidence was found. This does not prove the candidate lacks the skill."
+
+        closest_payload = None
+        if closest_evidence is not None:
+            closest_idx = max(
+                candidate_indices,
+                key=lambda index: float(best_similarity_per_evidence[index].item()),
+            )
+            closest_payload = {
+                "text": closest_evidence["text"],
+                "evidence_type": closest_evidence.get("evidence_type", "context"),
+                "similarity": round(float(best_similarity_per_evidence[closest_idx].item()), 3),
+            }
 
         requirement_details.append({
             "requirement": req["requirement"],
-            "category": req["category"],
-            "criterion_type": req["criterion_type"],
-            "priority": req["priority"],
-            "priority_source": req["priority_source"],
+            "source_statements": req.get("source_statements", [req["source_text"]]),
+            "category": req.get("category", "job criterion"),
+            "criterion_type": req.get("criterion_type", "job criterion"),
+            "priority": req.get("priority", "unspecified"),
+            "priority_source": req.get("priority_source", "not stated"),
             "status": status,
+            "score": points,
             "confidence": round(best_similarity * 100, 1),
-            "evidence_strength": evidence_strength,
-            "cv_evidence": best_evidence["text"] if status != "Missing" else "",
-            "closest_evidence": {
-                "text": closest_evidence["text"],
-                "evidence_type": closest_evidence.get("evidence_type", "context"),
-                "similarity": round(closest_similarity, 3)
-            },
-            "evidence_note": (
-                "A relevant entity and contextual passage were retrieved; review the excerpt to confirm the claim."
-                if status in ("Full Match", "Partial Match") else
-                "This passage describes related experience only. It does not establish that the candidate has performed this exact responsibility or possesses the exact qualification; manual review is required."
-                if status == "Transferable Context" else
-                "The closest passage did not contain sufficient supporting evidence. This does not prove the candidate lacks the skill."
-            ),
-            "alternative_evidence": alternatives
+            "evidence_strength": strength,
+            "cv_evidence": best_evidence["text"] if best_evidence is not None and status != "Missing" else "",
+            "closest_evidence": closest_payload,
+            "evidence_note": note,
+            "alternative_evidence": alternatives,
         })
 
-    score = round(weighted_total / total_weight, 2) if total_weight else 0.0
-    required_score = round(required_total / required_weight, 2) if required_weight else None
-    # Coverage means criteria with direct or partial evidence, not merely
-    # a semantically related/transferable passage.
+    score = _calculate_weighted_match_score(requirement_details)
+    required_score = round(required_total / required_count, 2) if required_count else None
     coverage = round(evidence_covered / len(requirements) * 100, 2)
+    source_statement_count = sum(len(item.get("source_statements", [])) for item in requirements)
+
     explanation = (
-        f"Evaluated {len(requirements)} assessable job criteria: {fully_matched} fully supported, "
-        f"{partial} partially supported, {transferable} with transferable context only, and "
-        f"{missing} without sufficient evidence. Excluded {len(excluded)} employer-benefit "
-        "statement(s). Transferable context is a weak indication for human review, not proof "
-        "that the candidate has performed the stated responsibility."
+        f"Evaluated {len(requirements)} grouped job criteria from {source_statement_count} source statements: "
+        f"{fully_matched} fully matched, {partial} partially matched, and {missing} without sufficient evidence. "
+        "Related duties are grouped to avoid counting several descriptions of the same capability as separate requirements. "
+        "Partial matches can include transferable evidence, which must be reviewed by a human."
     )
     return {
         "score": score,
         "evidence_coverage": coverage,
         "evidence_covered_count": evidence_covered,
         "requirements_count": len(requirements),
+        "source_statement_count": source_statement_count,
         "excluded_information_count": len(excluded),
         "fully_matched": fully_matched,
         "partial_matches": partial,
-        "transferable_contexts": transferable,
         "missing": missing,
         "required_without_evidence": required_without_evidence,
         "required_only_score": required_score,
-        "required_count": required_weight,
+        "required_count": required_count,
         "match_results": requirement_details,
         "requirements": requirements,
         "excluded_job_information": excluded,
         "cv_evidence": evidence,
-        "explanation": explanation
+        "explanation": explanation,
     }
-
 
 def evaluate_bias(cv_text: str) -> dict:
     """Heuristic screening only; a low result is not proof of fairness."""
