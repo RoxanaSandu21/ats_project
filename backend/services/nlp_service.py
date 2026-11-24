@@ -750,8 +750,8 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
         )
         av_task = bool(
             re.search(
-                rf"(?:{av_action})[\s\S]{{0,80}}(?:{av_object})|"
-                rf"(?:{av_object})[\s\S]{{0,80}}(?:{av_action})",
+                rf"(?:{av_action})[^.!?;]{{0,60}}(?:{av_object})|"
+                rf"(?:{av_object})[^.!?;]{{0,60}}(?:{av_action})",
                 text,
                 re.IGNORECASE,
             )
@@ -781,8 +781,8 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
         )
         network_task = bool(
             re.search(
-                rf"(?:{network_action})[\s\S]{{0,80}}(?:{network_object})|"
-                rf"(?:{network_object})[\s\S]{{0,80}}(?:{network_action})",
+                rf"(?:{network_action})[^.!?;]{{0,80}}(?:{network_object})|"
+                rf"(?:{network_object})[^.!?;]{{0,80}}(?:{network_action})",
                 text,
                 re.IGNORECASE,
             )
@@ -813,8 +813,8 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
         # groups, the regex alternation can match an object mention alone.
         service_level_activity = bool(
             re.search(
-                rf"(?:{service_level_action})[\s\S]{{0,60}}(?:{service_level_object})|"
-                rf"(?:{service_level_object})[\s\S]{{0,60}}(?:{service_level_action})",
+                rf"(?:{service_level_action})[^.!?;]{{0,60}}(?:{service_level_object})|"
+                rf"(?:{service_level_object})[^.!?;]{{0,60}}(?:{service_level_action})",
                 text,
                 re.IGNORECASE,
             )
