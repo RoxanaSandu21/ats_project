@@ -413,21 +413,24 @@ def _assess_evidence(requirement: dict, evidence: dict, similarity: float, entit
             return "Full Match", "strong_semantic_entity_and_skills_evidence", 100.0
         return "Partial Match", "semantically_aligned_entity_and_context", 50.0
 
-    # If GLiNER did not extract matching entities, allow a cautious partial
-    # result only when the whole passage is strongly related and has the right
-    # evidential form. This avoids the old 40% blanket rule.
+    # A transferable-context tier captures related experience without claiming
+    # that it proves the exact job requirement. It is deliberately worth less
+    # than a partial match and remains visibly distinct in the UI.
+    #
+    # For example, a software project may show related technical problem-solving,
+    # but it does not prove service-desk, room-booking, or AV support experience.
     if criterion_type == "responsibility" and evidence_type == "action_statement":
-        if similarity >= 0.56:
-            return "Partial Match", "strong_contextual_relation_review_required", 50.0
+        if similarity >= 0.44:
+            return "Transferable Context", "related_action_context_manual_review_required", 25.0
 
     if criterion_type == "qualification":
-        if evidence_type == "skills_list" and similarity >= 0.52:
-            return "Partial Match", "relevant_skills_list_review_required", 50.0
-        if evidence_type == "action_statement" and similarity >= 0.58:
-            return "Partial Match", "relevant_action_statement_review_required", 50.0
+        if evidence_type == "skills_list" and similarity >= 0.44:
+            return "Transferable Context", "related_skills_context_manual_review_required", 25.0
+        if evidence_type == "action_statement" and similarity >= 0.44:
+            return "Transferable Context", "related_action_context_manual_review_required", 25.0
 
-    if evidence_type == "action_statement" and similarity >= 0.70:
-        return "Partial Match", "strong_semantic_relation_review_required", 50.0
+    if evidence_type == "action_statement" and similarity >= 0.48:
+        return "Transferable Context", "related_context_manual_review_required", 25.0
 
     return "Missing", "retrieved_passage_lacks_sufficient_support", 0.0
 
@@ -477,7 +480,7 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
     requirement_details = []
     weighted_total = total_weight = 0.0
     required_total = required_weight = 0.0
-    fully_matched = partial = missing = required_without_evidence = 0
+    fully_matched = partial = transferable = missing = required_without_evidence = 0
     evidence_covered = 0
 
     for req in requirements:
@@ -524,7 +527,7 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
                 entity_embeddings, entity_indices
             )
 
-        status_rank = {"Full Match": 2, "Partial Match": 1, "Missing": 0}
+        status_rank = {"Full Match": 3, "Partial Match": 2, "Transferable Context": 1, "Missing": 0}
         ranked = sorted(
             candidate_indices,
             key=lambda index: (
@@ -553,12 +556,15 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
         if req["priority"] == "required":
             required_total += points
             required_weight += 1
-            if status == "Missing":
+            if status in ("Missing", "Transferable Context"):
+                # Transferable context is not direct evidence of a required criterion.
                 required_without_evidence += 1
         if status == "Full Match":
             fully_matched += 1
         elif status == "Partial Match":
             partial += 1
+        elif status == "Transferable Context":
+            transferable += 1
         else:
             missing += 1
         if status != "Missing":
@@ -589,7 +595,9 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
             },
             "evidence_note": (
                 "A relevant entity and contextual passage were retrieved; review the excerpt to confirm the claim."
-                if status != "Missing" else
+                if status in ("Full Match", "Partial Match") else
+                "This passage describes related experience only. It does not establish that the candidate has performed this exact responsibility or possesses the exact qualification; manual review is required."
+                if status == "Transferable Context" else
                 "The closest passage did not contain sufficient supporting evidence. This does not prove the candidate lacks the skill."
             ),
             "alternative_evidence": alternatives
@@ -600,9 +608,10 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
     coverage = round(evidence_covered / len(requirements) * 100, 2)
     explanation = (
         f"Evaluated {len(requirements)} assessable job criteria: {fully_matched} fully supported, "
-        f"{partial} partially supported, and {missing} without sufficient evidence. "
-        f"Excluded {len(excluded)} employer-benefit statement(s). Similarity retrieves passages; "
-        "entity/context checks are also required before a match is awarded."
+        f"{partial} partially supported, {transferable} with transferable context only, and "
+        f"{missing} without sufficient evidence. Excluded {len(excluded)} employer-benefit "
+        "statement(s). Transferable context is a weak indication for human review, not proof "
+        "that the candidate has performed the stated responsibility."
     )
     return {
         "score": score,
@@ -612,6 +621,7 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
         "excluded_information_count": len(excluded),
         "fully_matched": fully_matched,
         "partial_matches": partial,
+        "transferable_contexts": transferable,
         "missing": missing,
         "required_without_evidence": required_without_evidence,
         "required_only_score": required_score,
