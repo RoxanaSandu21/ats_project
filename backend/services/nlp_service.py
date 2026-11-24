@@ -749,7 +749,7 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
             r"(?:av )?(?:equipment|system|setup|hardware))\b"
         )
         av_task = bool(
-            re.search(rf"{av_action}[\\s\\S]{{0,80}}{av_object}|{av_object}[\\s\\S]{{0,80}}{av_action}", text, re.IGNORECASE)
+            re.search(rf"{av_action}[\s\S]{{0,80}}{av_object}|{av_object}[\s\S]{{0,80}}{av_action}", text, re.IGNORECASE)
         )
         if av_mention and av_task:
             return "direct"
@@ -781,8 +781,8 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
         )
         service_level_activity = bool(
             re.search(
-                rf"{service_level_action}[\\s\\S]{{0,60}}{service_level_object}|"
-                rf"{service_level_object}[\\s\\S]{{0,60}}{service_level_action}",
+                rf"{service_level_action}[\s\S]{{0,60}}{service_level_object}|"
+                rf"{service_level_object}[\s\S]{{0,60}}{service_level_action}",
                 text,
                 re.IGNORECASE,
             )
