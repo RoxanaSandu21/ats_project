@@ -648,64 +648,203 @@ def _semantic_entity_overlap(
     best_per_requirement = similarities.max(dim=1).values
     return float(best_per_requirement.mean().item())
 
-def _assess_evidence(requirement: dict, evidence: dict, similarity: float, entity_embeddings=None, entity_indices=None) -> Tuple[str, str, float]:
-    """
-    Semantic similarity retrieves passages. Evidence is assessed using the
-    passage type plus exact or semantic entity alignment. A strong sentence
-    similarity alone can only produce a review-needed partial result.
-    """
-    evidence_type = evidence.get("evidence_type", "context")
-    criterion_type = requirement.get("criterion_type", "job criterion")
+def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
+    """Return direct, contextual, or none using source-grounded task evidence.
 
+    Contextual evidence can support a partial match, never a full match by itself.
+    The rules mirror the evidence distinctions used by the Ollama prototype.
+    """
+    requirement = requirement_text.casefold()
+    quote = (evidence.get("quote") or evidence.get("text") or "").casefold()
+    label = (evidence.get("label") or "").casefold()
+    text = f"{label} {quote}"
+
+    def has(patterns) -> bool:
+        return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
+
+    if re.search(r"\benglish\b|language proficiency", requirement):
+        explicitly_named = bool(re.search(r"\benglish\b", quote))
+        explicit_level = has((
+            r"\b(native|fluent|proficient|advanced|intermediate|basic)\b",
+            r"\b(a[12]|b[12]|c[12])\b",
+            r"\b(speak|spoken|speaking|write|written|writing)\b",
+            r"\b(level|proficiency)\b",
+        ))
+        if explicitly_named and explicit_level:
+            return "direct"
+        if evidence.get("evidence_type") == "language_context" or evidence.get("is_english_writing_sample"):
+            return "contextual"
+        return "none"
+
+    if "pressure" in requirement or "fast-paced" in requirement:
+        return "direct" if has((
+            r"\b(under pressure|high[- ]pressure|fast[- ]paced|tight deadlines?)\b",
+            r"\b(manag(ed|ing) multiple priorities|multiple competing priorities)\b",
+            r"\b(urgent requests|time[- ]critical|high[- ]volume environment)\b",
+        )) else "none"
+
+    if (
+        "audio visual" in requirement
+        or "audiovisual" in requirement
+        or "video conference" in requirement
+        or "video conferencing" in requirement
+        or "video and audio" in requirement
+    ):
+        return "direct" if has((
+            r"\b(audio[- ]visual|a/v|av equipment|video conferencing|video conference)\b",
+            r"\b(projector|microphone|conference room|display setup|sound system)\b",
+        )) else "none"
+
+    if "network" in requirement:
+        return "direct" if has((
+            r"\b(network|networking|tcp/?ip|dns|dhcp|router|switch|lan|wan)\b",
+            r"\b(firewall|vpn|subnet|ethernet|wi[ -]?fi|wireless|osi model)\b",
+        )) else "none"
+
+    if "mailbox" in requirement or "ola" in requirement or "sla" in requirement:
+        return "direct" if has((
+            r"\b(mailbox|shared mailbox|ola|sla|service level agreement)\b",
+            r"\b(monitored|monitoring|managed|tracked) (?:the )?(?:mailbox|sla|ola|service levels?)\b",
+        )) else "none"
+
+    if "troubleshoot" in requirement or "support environment" in requirement:
+        support_environment = has((
+            r"\b(service desk|help desk|technical support|it support|user support|customer support)\b",
+            r"\b(incident management|support tickets|support environment|helpdesk)\b",
+        ))
+        troubleshooting_task = has((
+            r"\b(troubleshoot(?:ing|ed)?|diagnos(?:ed|ing|is)|automated system diagnostics)\b",
+            r"\b(resolved|investigated)\b.{0,60}\b(technical )?(?:issues|incidents|tickets)\b",
+        ))
+        if support_environment and troubleshooting_task:
+            return "direct"
+        if support_environment:
+            return "contextual"
+        if has((
+            r"\b(troubleshoot(?:ing|ed)?|diagnos(?:ed|ing|is)|debug(?:ged|ging)?)\b",
+            r"\b(fixed (?:software )?bugs?|resolved (?:software )?(?:issues?|bugs?|errors?)|"
+            r"investigated (?:software )?(?:issues?|bugs?|errors?))\b",
+        )):
+            return "contextual"
+        return "none"
+
+    if (
+        "speak" in requirement
+        or "communication" in requirement
+        or "communicat" in requirement
+        or "end-user" in requirement
+        or "end user" in requirement
+        or "point of contact" in requirement
+        or "first-line support" in requirement
+    ):
+        if has((
+            r"\b(communicat(?:ed|ing|ion)|interact(?:ed|ing)|present(?:ed|ing))\b",
+            r"\b(taught|teaching|advised|assisted|supported) (?:students|customers|clients|users)\b",
+            r"\b(customer[- ]facing|client[- ]facing|user[- ]facing)\b",
+            r"\b(handled|answered) (?:customer|client|user) (?:questions|inquiries|calls)\b",
+        )):
+            return "direct"
+        if has((
+            r"\b(business )?sales advisor\b",
+            r"\bsales (?:representative|consultant|associate)\b",
+            r"\bbrand ambassador\b",
+            r"\bcustomer service (?:advisor|representative|agent|associate)\b",
+            r"\b(client advisor|account manager|account executive)\b",
+            r"\b(teacher|tutor|instructor|trainer|lecturer|educator)\b",
+            r"\bretail associate\b",
+        )):
+            return "contextual"
+        # Generic technical support is direct only when the excerpt describes
+        # the support activity, not merely a role title containing "support".
+        if has((
+            r"\b(technical support|it support|service desk|help desk|helpdesk)\b",
+        )) and has((
+            r"\b(assisted|supported|resolved|handled|responded to|helped)\b",
+        )):
+            return "direct"
+        return "none"
+
+    if any(term in requirement for term in ("incident", "service request", "logging", "tracking")):
+        if has((
+            r"\b(incident log(?:ging)?|logged incidents?|tracked incidents?|service tickets?|"
+            r"support tickets?|ticketing system|service requests?)\b",
+        )):
+            return "direct"
+        if has((
+            r"\b(resolved|investigated|diagnosed|debugged)\b.{0,60}\b(issues?|bugs?|errors?)\b",
+        )):
+            return "contextual"
+        return "none"
+
+    if _entity_overlap({"entities": evidence.get("requirement_entities", [])}, evidence) > 0:
+        return "direct"
+    return "none"
+
+
+def _assess_evidence(
+    requirement: dict,
+    evidence: dict,
+    similarity: float,
+    entity_embeddings=None,
+    entity_indices=None,
+) -> Tuple[str, str, float]:
+    """Assess evidence with direct/contextual rules before generic semantic similarity."""
+    evidence_type = evidence.get("evidence_type", "context")
     if evidence_type == "heading_or_title":
         return "Missing", "title_only_not_evidence", 0.0
 
-    if criterion_type == "responsibility" and evidence_type == "skills_list":
+    support_level = _evidence_support_level(requirement.get("requirement", ""), evidence)
+    if support_level == "contextual":
+        # Customer-facing roles, software debugging, and English CV text are
+        # useful transferable context, not proof of the exact job criterion.
+        return "Partial Match", "contextual_transferable_evidence", 50.0
+
+    if support_level == "direct":
+        quote = (evidence.get("quote") or evidence.get("text") or "").casefold()
+        requirement_text = requirement.get("requirement", "").casefold()
+
+        if "english" in requirement_text:
+            speaks = bool(re.search(r"\b(spoken|speaking)\b", quote))
+            writes = bool(re.search(r"\b(written|writing)\b", quote))
+            if ("spoken" in requirement_text and "written" in requirement_text) and not (speaks and writes):
+                return "Partial Match", "explicit_english_level_but_modes_not_both_proven", 60.0
+
+        if evidence_type in ("skills_list", "experience_context", "context_window"):
+            return "Partial Match", "explicit_but_limited_or_context_only_evidence", 50.0
+        return "Full Match", "direct_source_grounded_task_evidence", 80.0
+
+    if requirement.get("criterion_type") == "responsibility" and evidence_type == "skills_list":
         return "Missing", "skills_list_does_not_demonstrate_responsibility", 0.0
 
+    # Generic entity alignment is used only for criteria without a specialized
+    # evidence rule. Similarity retrieves passages; it does not establish a match.
     exact_overlap = _entity_overlap(requirement, evidence)
-    semantic_overlap = _semantic_entity_overlap(requirement, evidence, entity_embeddings, entity_indices)
+    semantic_overlap = _semantic_entity_overlap(
+        requirement, evidence, entity_embeddings, entity_indices
+    )
     entity_support = max(exact_overlap, semantic_overlap)
-
-    # A responsibility needs a substantive action passage. A skill list may
-    # support a skill/qualification, but cannot prove that the candidate has
-    # performed the responsibility.
-    if entity_support >= 0.55 and similarity >= 0.38:
-        if (
-            similarity >= 0.66
-            and entity_support >= 0.70
-            and evidence_type == "action_statement"
-        ):
-            return "Full Match", "strong_semantic_entity_and_action_evidence", 100.0
-        if (
-            similarity >= 0.68
-            and entity_support >= 0.72
-            and evidence_type == "skills_list"
-            and criterion_type == "qualification"
-        ):
-            return "Full Match", "strong_semantic_entity_and_skills_evidence", 100.0
-        return "Partial Match", "semantically_aligned_entity_and_context", 50.0
-
-    # A transferable-context tier captures related experience without claiming
-    # that it proves the exact job requirement. It is deliberately worth less
-    # than a partial match and remains visibly distinct in the UI.
-    #
-    # For example, a software project may show related technical problem-solving,
-    # but it does not prove service-desk, room-booking, or AV support experience.
-    if criterion_type == "responsibility" and evidence_type == "action_statement":
-        if similarity >= 0.44:
-            return "Transferable Context", "related_action_context_manual_review_required", 25.0
-
-    if criterion_type == "qualification":
-        if evidence_type == "skills_list" and similarity >= 0.44:
-            return "Transferable Context", "related_skills_context_manual_review_required", 25.0
-        if evidence_type == "action_statement" and similarity >= 0.44:
-            return "Transferable Context", "related_action_context_manual_review_required", 25.0
-
-    if evidence_type == "action_statement" and similarity >= 0.48:
-        return "Transferable Context", "related_context_manual_review_required", 25.0
+    if (
+        entity_support >= 0.68
+        and similarity >= 0.42
+        and evidence_type in ("action_statement", "skills_list")
+    ):
+        if evidence_type == "skills_list":
+            return "Partial Match", "named_skill_list_without_proficiency_depth", 50.0
+        return "Partial Match", "semantically_aligned_action_evidence", 50.0
 
     return "Missing", "retrieved_passage_lacks_sufficient_support", 0.0
+
+
+def _calculate_weighted_match_score(requirement_details: List[dict]) -> float:
+    """Use the same priority weights as the Ollama prototype."""
+    weighted_total = 0.0
+    total_weight = 0.0
+    for item in requirement_details:
+        priority = item.get("priority", "unspecified")
+        weight = PRIORITY_WEIGHTS.get(priority, PRIORITY_WEIGHTS["unspecified"])
+        weighted_total += float(item.get("score", 0) or 0) * weight
+        total_weight += weight
+    return round(weighted_total / total_weight, 2) if total_weight else 0.0
 
 def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
     """Evaluate complete job criteria against contextual CV passages."""
