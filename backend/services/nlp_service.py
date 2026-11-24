@@ -325,17 +325,13 @@ def extract_cv_evidence(cv_text: str) -> List[dict]:
 
 
 def _entity_overlap(requirement: dict, evidence: dict) -> float:
-    """
-    Compare extracted entity phrases, not just their broad labels. This avoids
-    treating two passages as a match merely because both mention 'software'
-    or 'support'.
-    """
+    """Return exact phrase overlap between GLiNER entity spans."""
     req_terms = {
-        re.sub(r"\s+", " ", entity["text"].casefold()).strip(" .,:;")
+        re.sub(r"\\s+", " ", entity["text"].casefold()).strip(" .,:;")
         for entity in requirement.get("entities", [])
     }
     cv_terms = {
-        re.sub(r"\s+", " ", entity["text"].casefold()).strip(" .,:;")
+        re.sub(r"\\s+", " ", entity["text"].casefold()).strip(" .,:;")
         for entity in evidence.get("entities", [])
     }
     req_terms.discard("")
@@ -345,37 +341,90 @@ def _entity_overlap(requirement: dict, evidence: dict) -> float:
     return len(req_terms & cv_terms) / len(req_terms)
 
 
+def _semantic_entity_overlap(requirement: dict, evidence: dict) -> float:
+    """
+    Estimate whether extracted entity phrases are semantically related.
+    This avoids requiring identical surface wording (e.g. 'troubleshooting'
+    versus 'diagnosed and resolved issues') while retaining entity grounding.
+    """
+    req_terms = [entity["text"] for entity in requirement.get("entities", []) if entity.get("text")]
+    cv_terms = [entity["text"] for entity in evidence.get("entities", []) if entity.get("text")]
+    if not req_terms or not cv_terms:
+        return 0.0
+
+    try:
+        req_vectors = embedding_model.encode(
+            req_terms, convert_to_tensor=True, normalize_embeddings=True
+        )
+        cv_vectors = embedding_model.encode(
+            cv_terms, convert_to_tensor=True, normalize_embeddings=True
+        )
+        similarities = util.cos_sim(req_vectors, cv_vectors)
+        # For every job entity, take its closest CV entity, then average.
+        # This is more tolerant than exact text equality but avoids a single
+        # unrelated pair being enough when the job contains several entities.
+        best_per_requirement = similarities.max(dim=1).values
+        return float(best_per_requirement.mean().item())
+    except Exception as exc:
+        print(f"[NLP] Entity similarity warning: {exc}")
+        return _entity_overlap(requirement, evidence)
+
+
 def _assess_evidence(requirement: dict, evidence: dict, similarity: float) -> Tuple[str, str, float]:
     """
-    Embedding similarity retrieves passages. A partial/full match additionally
-    requires an extracted entity phrase in common, except for very strong
-    action-statement evidence for a job responsibility.
+    Semantic similarity retrieves passages. Evidence is assessed using the
+    passage type plus exact or semantic entity alignment. A strong sentence
+    similarity alone can only produce a review-needed partial result.
     """
     evidence_type = evidence.get("evidence_type", "context")
+    criterion_type = requirement.get("criterion_type", "job criterion")
+
     if evidence_type == "heading_or_title":
         return "Missing", "title_only_not_evidence", 0.0
 
-    if requirement.get("criterion_type") == "responsibility" and evidence_type == "skills_list":
+    if criterion_type == "responsibility" and evidence_type == "skills_list":
         return "Missing", "skills_list_does_not_demonstrate_responsibility", 0.0
 
-    overlap = _entity_overlap(requirement, evidence)
-    if overlap > 0 and similarity >= 0.42:
-        if similarity >= 0.66 and evidence_type in ("action_statement", "skills_list"):
-            return "Full Match", "direct_entity_and_context", 100.0
-        return "Partial Match", "shared_entity_with_context", 50.0
+    exact_overlap = _entity_overlap(requirement, evidence)
+    semantic_overlap = _semantic_entity_overlap(requirement, evidence)
+    entity_support = max(exact_overlap, semantic_overlap)
 
-    # A strong semantic retrieval can be flagged as potentially relevant for a
-    # responsibility, but is only partial and never a full match without entity
-    # support. The threshold is intentionally conservative.
-    if (
-        requirement.get("criterion_type") == "responsibility"
-        and evidence_type == "action_statement"
-        and similarity >= 0.74
-    ):
+    # A responsibility needs a substantive action passage. A skill list may
+    # support a skill/qualification, but cannot prove that the candidate has
+    # performed the responsibility.
+    if entity_support >= 0.58 and similarity >= 0.40:
+        if (
+            similarity >= 0.68
+            and entity_support >= 0.72
+            and evidence_type == "action_statement"
+        ):
+            return "Full Match", "strong_semantic_entity_and_action_evidence", 100.0
+        if (
+            similarity >= 0.68
+            and entity_support >= 0.72
+            and evidence_type == "skills_list"
+            and criterion_type == "qualification"
+        ):
+            return "Full Match", "strong_semantic_entity_and_skills_evidence", 100.0
+        return "Partial Match", "semantically_aligned_entity_and_context", 50.0
+
+    # If GLiNER did not extract matching entities, allow a cautious partial
+    # result only when the whole passage is strongly related and has the right
+    # evidential form. This avoids the old 40% blanket rule.
+    if criterion_type == "responsibility" and evidence_type == "action_statement":
+        if similarity >= 0.60:
+            return "Partial Match", "strong_contextual_relation_review_required", 50.0
+
+    if criterion_type == "qualification":
+        if evidence_type == "skills_list" and similarity >= 0.56:
+            return "Partial Match", "relevant_skills_list_review_required", 50.0
+        if evidence_type == "action_statement" and similarity >= 0.62:
+            return "Partial Match", "relevant_action_statement_review_required", 50.0
+
+    if evidence_type == "action_statement" and similarity >= 0.70:
         return "Partial Match", "strong_semantic_relation_review_required", 50.0
 
-    return "Missing", "retrieval_similarity_without_sufficient_support", 0.0
-
+    return "Missing", "retrieved_passage_lacks_sufficient_support", 0.0
 
 def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
     """Evaluate complete job criteria against contextual CV passages."""
@@ -469,6 +518,13 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
         best_evidence = evidence[best_idx]
         status, evidence_strength, points = assessed[best_idx]
 
+        closest_idx = max(
+            candidate_indices,
+            key=lambda index: float(similarities[index].item())
+        )
+        closest_evidence = evidence[closest_idx]
+        closest_similarity = float(similarities[closest_idx].item())
+
         weight = 1.0 if req["priority"] == "required" else (
             0.5 if req["priority"] == "preferred" else 1.0
         )
@@ -506,6 +562,11 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
             "confidence": round(best_similarity * 100, 1),
             "evidence_strength": evidence_strength,
             "cv_evidence": best_evidence["text"] if status != "Missing" else "",
+            "closest_evidence": {
+                "text": closest_evidence["text"],
+                "evidence_type": closest_evidence.get("evidence_type", "context"),
+                "similarity": round(closest_similarity, 3)
+            },
             "evidence_note": (
                 "A relevant entity and contextual passage were retrieved; review the excerpt to confirm the claim."
                 if status != "Missing" else
