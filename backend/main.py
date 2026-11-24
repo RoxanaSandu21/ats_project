@@ -57,7 +57,11 @@ def upload_cv(job_id: int, file: UploadFile = File(...), db: Session = Depends(g
     db_candidate = None
     if info["email"] != "Unspecified":
         db_candidate = db.query(models.Candidate).filter(
-            models.Candidate.email == info["email"]
+            models.Candidate.email.ilike(info["email"])
+        ).first()
+    elif info["phone"] != "Unspecified":
+        db_candidate = db.query(models.Candidate).filter(
+            models.Candidate.phone == info["phone"]
         ).first()
 
     if db_candidate:
@@ -82,13 +86,18 @@ def upload_cv(job_id: int, file: UploadFile = File(...), db: Session = Depends(g
             "explanation", "match_results", "requirements", "excluded_job_information", "cv_evidence",
             "evidence_coverage", "evidence_covered_count", "requirements_count",
             "fully_matched", "partial_matches", "missing", "source_statement_count",
-            "required_without_evidence", "required_only_score", "required_count"
+            "required_without_evidence", "required_only_score", "required_only_percent",
+            "required_count", "ollama_compatible_score", "score_scale_max",
+            "compatibility_percent"
         )
     }
+    bias_report["match_details"]["score_version"] = "normalized_100_v2"
+
+    normalized_score = result.get("compatibility_percent", round(result["score"] / 80.0 * 100.0, 2))
 
     db.add(models.Evaluation(
         job_id=job.id, candidate_id=db_candidate.id,
-        match_score=result["score"], bias_report=bias_report
+        match_score=normalized_score, bias_report=bias_report
     ))
     db.commit()
 
@@ -96,7 +105,8 @@ def upload_cv(job_id: int, file: UploadFile = File(...), db: Session = Depends(g
         "message": "CV processed successfully!",
         "candidate_id": db_candidate.id,
         "full_name": db_candidate.full_name,
-        "match_score": result["score"],
+        "match_score": normalized_score,
+        "ollama_compatible_score": result.get("ollama_compatible_score", result["score"]),
         "evaluation_summary": {
             "evidence_coverage": result.get("evidence_coverage", 0),
             "evidence_covered_count": result.get("evidence_covered_count", 0),
@@ -107,6 +117,9 @@ def upload_cv(job_id: int, file: UploadFile = File(...), db: Session = Depends(g
             "missing": result.get("missing", 0),
             "required_without_evidence": result.get("required_without_evidence", 0),
             "required_only_score": result.get("required_only_score"),
+            "required_only_percent": result.get("required_only_percent"),
+            "ollama_compatible_score": result.get("ollama_compatible_score", result["score"]),
+            "score_scale_max": result.get("score_scale_max", 80.0),
             "required_count": result.get("required_count", 0)
         }
     }
@@ -131,7 +144,25 @@ def get_leaderboard(job_id: int, db: Session = Depends(get_db)):
                 "full_name": cand.full_name,
                 "email": cand.email,
                 "phone": cand.phone,
-                "match_score": ev.match_score,
+                # Earlier database rows stored the Ollama-compatible 0–80
+                # points directly. Convert those historical values to the
+                # normalized 0–100 scale so old and new rows remain comparable.
+                "match_score": (
+                    ev.match_score
+                    if (ev.bias_report or {}).get("match_details", {}).get("score_version")
+                    == "normalized_100_v2"
+                    else round(float(ev.match_score or 0.0) / 80.0 * 100.0, 2)
+                ),
+                "ollama_compatible_score": (
+                    (ev.bias_report or {}).get("match_details", {}).get("ollama_compatible_score")
+                    if (ev.bias_report or {}).get("match_details", {}).get("score_version")
+                    == "normalized_100_v2"
+                    else ev.match_score
+                ),
+                "score_version": (
+                    (ev.bias_report or {}).get("match_details", {}).get("score_version")
+                    or "legacy_ollama_0_80"
+                ),
                 "bias_report": ev.bias_report,
                 "submitted_at": ev.created_at
             }
