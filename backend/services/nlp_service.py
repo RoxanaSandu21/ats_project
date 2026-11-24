@@ -1,6 +1,6 @@
 import fitz
 import re
-from typing import Dict, List, Optional
+from typing import Dict, List, Tuple
 from sentence_transformers import SentenceTransformer, util
 from gliner import GLiNER
 
@@ -15,11 +15,53 @@ ENTITY_LABELS = [
     "language", "certification", "methodology", "job responsibility",
     "work experience", "qualification"
 ]
-MIN_SENTENCE_LENGTH = 18
+
+# These identify employer-provided compensation/perks, not candidate criteria.
+# This is deliberately separate from the skill/entity vocabulary.
+EMPLOYER_BENEFIT_CUES = (
+    "retail voucher", "voucher", "reimburse", "reimbursement",
+    "tuition fee", "dedicated training department", "benefits package",
+    "employee benefits", "health insurance", "meal ticket", "meal voucher",
+    "salary", "annual leave", "paid leave", "pension contribution",
+    "staff discount", "employee discount"
+)
+
+QUALIFICATION_CUES = (
+    "experience", "knowledge", "ability", "understanding", "proficient",
+    "proficiency", "familiar", "degree", "certification", "qualification",
+    "spoken and written", "language skills"
+)
+
+RESPONSIBILITY_CUES = (
+    "provide", "provides", "provided", "providing", "act as", "record",
+    "records", "recording", "troubleshoot", "troubleshooting", "manage",
+    "manages", "maintain", "maintains", "assist", "assists", "monitor",
+    "monitors", "support", "supports", "ensure", "ensures", "resolve",
+    "resolves", "handle", "handles", "coordinate", "coordinates",
+    "deliver", "delivers", "administer", "administers"
+)
+
+ACTION_CUES = (
+    "developed", "built", "created", "designed", "implemented", "provided",
+    "supported", "managed", "maintained", "troubleshot", "resolved",
+    "assisted", "coordinated", "recorded", "monitored", "tested",
+    "documented", "handled", "worked", "collaborated", "contributed",
+    "delivered", "configured", "installed", "diagnosed", "helped",
+    "improved", "deployed", "analysed", "analyzed"
+)
+
+PREFERRED_CUES = (
+    "nice to have", "preferred", "desirable", "bonus", "advantage",
+    "would be a plus", "ideally", "optional"
+)
+REQUIRED_CUES = (
+    "must", "required", "requirement", "essential", "mandatory",
+    "we require", "minimum"
+)
 
 
 def extract_text_from_pdf(pdf_path: str) -> str:
-    """Extract raw text from a PDF while preserving line breaks."""
+    """Extract raw text from a PDF while preserving page-level line breaks."""
     try:
         with fitz.open(pdf_path) as doc:
             return "\n".join(page.get_text("text") for page in doc)
@@ -28,15 +70,82 @@ def extract_text_from_pdf(pdf_path: str) -> str:
         return ""
 
 
-def split_into_sentences(text: str) -> List[str]:
-    """Split CV/job text into useful contextual units (bullets and sentences)."""
-    chunks = []
-    for line in re.split(r"\n+", text):
-        line = re.sub(r"^\s*(?:[•●▪◦*\-–—]+|\d+[.)])\s*", "", line).strip()
+def _strip_bullet(line: str) -> Tuple[str, bool]:
+    match = re.match(r"^\s*([•●▪◦*\-–—]+|\d+[.)])\s*", line)
+    if match:
+        return line[match.end():].strip(), True
+    return line.strip(), False
+
+
+def _looks_like_heading(line: str) -> bool:
+    """Identify short title-like lines so they are not merged into body text."""
+    words = line.split()
+    if not words or len(words) > 8 or line.endswith((".", "?", "!", ":", ";", ",")):
+        return False
+    if re.search(r"\b(?:19|20)\d{2}\b", line):
+        return True
+    # Short title-case / uppercase lines are usually CV headings or role titles.
+    letters = [char for char in line if char.isalpha()]
+    if letters and (all(char.isupper() for char in letters) or
+                    sum(word[:1].isupper() for word in words if word) >= max(2, len(words) - 1)):
+        return True
+    return False
+
+
+def _join_wrapped_lines(text: str) -> List[str]:
+    """
+    Rejoin PDF visual line wraps without merging distinct bullets or headings.
+    A wrapped continuation commonly starts in lowercase or closes punctuation
+    opened on the previous physical line.
+    """
+    logical_lines = []
+    current = ""
+
+    for raw_line in text.replace("\u200b", "").splitlines():
+        line, is_bullet = _strip_bullet(raw_line)
         if not line:
+            if current:
+                logical_lines.append(current.strip())
+                current = ""
             continue
-        parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", line)
-        chunks.extend(part.strip() for part in parts if len(part.strip()) >= MIN_SENTENCE_LENGTH)
+
+        if not current:
+            current = line
+            continue
+
+        current_ends_sentence = current.rstrip().endswith((".", "?", "!", ";"))
+        continuation = (
+            line[:1].islower()
+            or line.startswith((")", "]", ",", ";", ":"))
+            or current.rstrip().endswith((",", "(", "/", "-", "–", "and", "or"))
+        )
+        if is_bullet or current_ends_sentence or _looks_like_heading(line):
+            logical_lines.append(current.strip())
+            current = line
+        elif continuation:
+            current = f"{current.rstrip()} {line.lstrip()}"
+        else:
+            logical_lines.append(current.strip())
+            current = line
+
+    if current:
+        logical_lines.append(current.strip())
+    return logical_lines
+
+
+def split_into_sentences(text: str) -> List[str]:
+    """Split text into contextual units while repairing common PDF line wraps."""
+    chunks = []
+    for logical_line in _join_wrapped_lines(text):
+        parts = re.split(r"(?<=[.!?])\s+(?=[A-Z0-9])", logical_line)
+        for part in parts:
+            # Semicolon-separated job duties often contain separate criteria.
+            clauses = re.split(r"\s*;\s*(?=[A-Z])", part) if ";" in part else [part]
+            chunks.extend(
+                re.sub(r"\s+", " ", clause).strip()
+                for clause in clauses
+                if len(clause.strip()) >= 3
+            )
     return chunks
 
 
@@ -64,132 +173,237 @@ def _unique_entities(text: str) -> List[dict]:
     return results
 
 
-def _priority(text: str) -> str:
+def _is_employer_benefit(text: str) -> bool:
     lowered = text.casefold()
-    preferred = ("nice to have", "preferred", "desirable", "bonus", "advantage",
-                 "would be a plus", "ideally", "optional")
-    required = ("must", "required", "requirement", "essential", "mandatory",
-                "you have", "we require", "minimum")
-    if any(term in lowered for term in preferred):
-        return "preferred"
-    if any(term in lowered for term in required):
-        return "required"
-    return "unspecified"
+    return any(cue in lowered for cue in EMPLOYER_BENEFIT_CUES)
 
 
 def _category(text: str, entities: List[dict]) -> str:
-    labels = [e["type"] for e in entities]
-    if "language" in labels:
+    lowered = text.casefold()
+    labels = [entity["type"] for entity in entities]
+
+    if "language" in labels or re.search(r"\benglish\b|\bspoken and written\b", lowered):
         return "language"
+    if "soft skill" in labels or any(
+        cue in lowered for cue in ("work under pressure", "communication skills", "interpersonal skills")
+    ):
+        return "soft skill"
     if "certification" in labels or "qualification" in labels:
         return "qualification"
-    if "soft skill" in labels:
-        return "soft skill"
-    if any(x in labels for x in ("technical skill", "software", "tool", "methodology")):
+    if any(label in labels for label in ("technical skill", "software", "tool", "methodology")):
         return "technical skill"
-    lowered = text.casefold()
-    if any(x in lowered for x in ("years of experience", "degree", "bachelor", "master")):
-        return "experience / education"
+    if any(cue in lowered for cue in QUALIFICATION_CUES):
+        return "qualification"
     return "job criterion"
 
 
-def extract_job_requirements(job_description: str) -> List[dict]:
+def _criterion_type(text: str, category: str) -> str:
+    lowered = text.casefold()
+    if category in ("language", "soft skill", "qualification", "technical skill"):
+        return "qualification"
+    if any(cue in lowered for cue in RESPONSIBILITY_CUES):
+        return "responsibility"
+    return "job criterion"
+
+
+def _priority(text: str, criterion_type: str) -> Tuple[str, str]:
+    lowered = text.casefold()
+    if any(term in lowered for term in PREFERRED_CUES):
+        return "preferred", "explicit wording"
+    if any(term in lowered for term in REQUIRED_CUES):
+        return "required", "explicit wording"
+    # A stated qualification (e.g. English proficiency or troubleshooting
+    # experience) is treated as required unless the advert marks it preferred.
+    if criterion_type == "qualification":
+        return "required", "inferred from qualification wording"
+    return "unspecified", "not stated in the advert"
+
+
+def extract_job_criteria(job_description: str) -> Tuple[List[dict], List[dict]]:
     """
-    Extract complete requirement statements, not just isolated entity names.
-    GLiNER supplies entity/category hints; the original sentence is retained as
-    the assessable requirement and priority is inferred from its wording.
+    Extract assessable candidate criteria and separately retain employer benefits.
+    GLiNER provides entity hints; the complete source statement remains visible.
     """
-    requirements = []
-    seen = set()
+    requirements, excluded, seen = [], [], set()
     for sentence in split_into_sentences(job_description):
         entities = _unique_entities(sentence)
-        lowered = sentence.casefold()
-        has_requirement_signal = bool(entities) or any(term in lowered for term in (
-            "experience", "knowledge", "ability", "ability to", "proficient",
-            "familiar", "understanding", "communication", "troubleshoot",
-            "responsible", "support", "degree", "certification", "english"
-        ))
-        if not has_requirement_signal:
-            continue
         normalized = re.sub(r"\s+", " ", sentence).strip()
         key = normalized.casefold().strip(" .;:-")
-        if key in seen:
+        if not key or key in seen:
             continue
         seen.add(key)
+
+        if _is_employer_benefit(normalized):
+            excluded.append({
+                "statement": normalized,
+                "category": "employer benefit",
+                "reason": "Employer-provided benefit or compensation; not a candidate qualification or responsibility."
+            })
+            continue
+
+        lowered = normalized.casefold()
+        has_requirement_signal = bool(entities) or any(
+            cue in lowered for cue in (
+                "experience", "knowledge", "ability", "proficient",
+                "familiar", "understanding", "communication", "troubleshoot",
+                "responsible", "support", "degree", "certification", "english",
+                "provide", "record", "manage", "maintain", "assist", "monitor"
+            )
+        )
+        if not has_requirement_signal:
+            continue
+
+        category = _category(normalized, entities)
+        criterion_type = _criterion_type(normalized, category)
+        priority, priority_source = _priority(normalized, criterion_type)
         requirements.append({
             "requirement": normalized,
-            "category": _category(normalized, entities),
-            "priority": _priority(normalized),
-            "entities": [{"text": e["text"], "type": e["type"]} for e in entities],
+            "category": category,
+            "criterion_type": criterion_type,
+            "priority": priority,
+            "priority_source": priority_source,
+            "entities": [{"text": entity["text"], "type": entity["type"]} for entity in entities],
             "source_text": sentence
         })
+    return requirements, excluded
+
+
+def extract_job_requirements(job_description: str) -> List[dict]:
+    """Backward-compatible helper returning only assessable criteria."""
+    requirements, _ = extract_job_criteria(job_description)
     return requirements
+
+
+def _looks_like_cv_heading(text: str) -> bool:
+    words = text.split()
+    if len(words) <= 8 and not re.search(r"[.!?]", text):
+        letters = [char for char in text if char.isalpha()]
+        if letters and sum(word[:1].isupper() for word in words if word) >= max(2, len(words) - 1):
+            return True
+    return False
+
+
+def _is_skills_list(text: str) -> bool:
+    lowered = text.casefold()
+    return any(label in lowered for label in (
+        "tools used:", "languages:", "frameworks", "databases:", "tools:"
+    ))
 
 
 def extract_cv_evidence(cv_text: str) -> List[dict]:
     """
-    Keep complete CV sentences/bullets as evidence. GLiNER entities are attached
-    as hints; matching never discards the surrounding responsibility/context.
+    Retain complete CV passages and distinguish action statements, skills lists,
+    generic context, and short headings. Headings are displayed but not used as
+    evidence of competence.
     """
     evidence = []
     for sentence in split_into_sentences(cv_text):
         entities = _unique_entities(sentence)
+        lowered = sentence.casefold()
+        if _looks_like_cv_heading(sentence):
+            evidence_type = "heading_or_title"
+        elif _is_skills_list(sentence):
+            evidence_type = "skills_list"
+        elif any(cue in lowered for cue in ACTION_CUES) or any(
+            entity["type"] in ("job responsibility", "work experience") for entity in entities
+        ):
+            evidence_type = "action_statement"
+        else:
+            evidence_type = "context"
+
         evidence.append({
             "text": sentence,
-            "evidence_type": "responsibility_or_context",
-            "entities": [{"text": e["text"], "type": e["type"]} for e in entities]
+            "evidence_type": evidence_type,
+            "entities": [{"text": entity["text"], "type": entity["type"]} for entity in entities]
         })
     return evidence
 
 
 def _entity_overlap(requirement: dict, evidence: dict) -> float:
-    req_terms = {e["text"].casefold() for e in requirement.get("entities", [])}
-    cv_terms = {e["text"].casefold() for e in evidence.get("entities", [])}
+    """
+    Compare extracted entity phrases, not just their broad labels. This avoids
+    treating two passages as a match merely because both mention 'software'
+    or 'support'.
+    """
+    req_terms = {
+        re.sub(r"\s+", " ", entity["text"].casefold()).strip(" .,:;")
+        for entity in requirement.get("entities", [])
+    }
+    cv_terms = {
+        re.sub(r"\s+", " ", entity["text"].casefold()).strip(" .,:;")
+        for entity in evidence.get("entities", [])
+    }
+    req_terms.discard("")
+    cv_terms.discard("")
     if not req_terms:
         return 0.0
     return len(req_terms & cv_terms) / len(req_terms)
 
 
-def _assess_evidence(requirement: dict, evidence: dict, similarity: float) -> tuple:
+def _assess_evidence(requirement: dict, evidence: dict, similarity: float) -> Tuple[str, str, float]:
+    """
+    Embedding similarity retrieves passages. A partial/full match additionally
+    requires an extracted entity phrase in common, except for very strong
+    action-statement evidence for a job responsibility.
+    """
+    evidence_type = evidence.get("evidence_type", "context")
+    if evidence_type == "heading_or_title":
+        return "Missing", "title_only_not_evidence", 0.0
+
+    if requirement.get("criterion_type") == "responsibility" and evidence_type == "skills_list":
+        return "Missing", "skills_list_does_not_demonstrate_responsibility", 0.0
+
     overlap = _entity_overlap(requirement, evidence)
-    # Similarity retrieves candidate evidence; it is not treated as proof by itself.
-    if similarity >= 0.62 and (overlap > 0 or similarity >= 0.76):
-        return "Full Match", "direct_or_strong", 100.0
-    if similarity >= 0.40:
-        return "Partial Match", "indirect_or_partial", 50.0
-    return "Missing", "insufficient", 0.0
+    if overlap > 0 and similarity >= 0.42:
+        if similarity >= 0.66 and evidence_type in ("action_statement", "skills_list"):
+            return "Full Match", "direct_entity_and_context", 100.0
+        return "Partial Match", "shared_entity_with_context", 50.0
+
+    # A strong semantic retrieval can be flagged as potentially relevant for a
+    # responsibility, but is only partial and never a full match without entity
+    # support. The threshold is intentionally conservative.
+    if (
+        requirement.get("criterion_type") == "responsibility"
+        and evidence_type == "action_statement"
+        and similarity >= 0.74
+    ):
+        return "Partial Match", "strong_semantic_relation_review_required", 50.0
+
+    return "Missing", "retrieval_similarity_without_sufficient_support", 0.0
 
 
 def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
-    """Evaluate full job statements against contextual CV excerpts."""
+    """Evaluate complete job criteria against contextual CV passages."""
     if not cv_text.strip():
         return {
             "score": 0.0, "match_results": [], "requirements": [],
-            "cv_evidence": [], "explanation": "Empty CV text."
+            "excluded_job_information": [], "cv_evidence": [],
+            "explanation": "Empty CV text."
         }
 
-    requirements = extract_job_requirements(job_description)
+    requirements, excluded = extract_job_criteria(job_description)
     evidence = extract_cv_evidence(cv_text)
     if not requirements:
         return {
             "score": 0.0, "match_results": [], "requirements": [],
-            "cv_evidence": evidence, "explanation": "No job requirements could be extracted."
+            "excluded_job_information": excluded, "cv_evidence": evidence,
+            "explanation": "No assessable job criteria could be extracted."
         }
     if not evidence:
         return {
             "score": 0.0, "match_results": [], "requirements": requirements,
-            "cv_evidence": [], "explanation": "No usable CV text was extracted."
+            "excluded_job_information": excluded, "cv_evidence": [],
+            "explanation": "No usable CV text was extracted."
         }
 
     evidence_texts = [item["text"] for item in evidence]
     evidence_embeddings = embedding_model.encode(
         evidence_texts, convert_to_tensor=True, normalize_embeddings=True
     )
+
     requirement_details = []
-    weighted_total = 0.0
-    total_weight = 0.0
-    required_total = 0.0
-    required_weight = 0.0
+    weighted_total = total_weight = 0.0
+    required_total = required_weight = 0.0
     fully_matched = partial = missing = required_without_evidence = 0
     evidence_covered = 0
 
@@ -198,7 +412,39 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
             req["requirement"], convert_to_tensor=True, normalize_embeddings=True
         )
         similarities = util.cos_sim(req_embedding, evidence_embeddings)[0]
-        ranked = similarities.argsort(descending=True)[:3].tolist()
+
+        # Headings and titles can be useful context, but they are not competence evidence.
+        candidate_indices = [
+            index for index, item in enumerate(evidence)
+            if item.get("evidence_type") != "heading_or_title"
+        ]
+        if not candidate_indices:
+            requirement_details.append({
+                "requirement": req["requirement"],
+                "category": req["category"],
+                "criterion_type": req["criterion_type"],
+                "priority": req["priority"],
+                "priority_source": req["priority_source"],
+                "status": "Missing",
+                "confidence": 0.0,
+                "evidence_strength": "no_substantive_cv_passage",
+                "cv_evidence": "",
+                "evidence_note": "Only headings or titles were available; they are not treated as evidence of competence.",
+                "alternative_evidence": []
+            })
+            missing += 1
+            if req["priority"] == "required":
+                required_without_evidence += 1
+                required_weight += 1
+            weight = 0.5 if req["priority"] == "preferred" else 1.0
+            total_weight += weight
+            continue
+
+        ranked = sorted(
+            candidate_indices,
+            key=lambda index: float(similarities[index].item()),
+            reverse=True
+        )[:3]
         best_idx = ranked[0]
         best_similarity = float(similarities[best_idx].item())
         best_evidence = evidence[best_idx]
@@ -224,24 +470,27 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
             evidence_covered += 1
 
         alternatives = []
-        for idx in ranked[1:]:
+        for index in ranked[1:]:
             alternatives.append({
-                "text": evidence[idx]["text"],
-                "similarity": round(float(similarities[idx].item()), 3)
+                "text": evidence[index]["text"],
+                "evidence_type": evidence[index]["evidence_type"],
+                "similarity": round(float(similarities[index].item()), 3)
             })
 
         requirement_details.append({
             "requirement": req["requirement"],
             "category": req["category"],
+            "criterion_type": req["criterion_type"],
             "priority": req["priority"],
+            "priority_source": req["priority_source"],
             "status": status,
             "confidence": round(best_similarity * 100, 1),
             "evidence_strength": evidence_strength,
             "cv_evidence": best_evidence["text"] if status != "Missing" else "",
             "evidence_note": (
-                "Relevant CV context retrieved; review the excerpt to confirm the claim."
+                "A relevant entity and contextual passage were retrieved; review the excerpt to confirm the claim."
                 if status != "Missing" else
-                "No sufficiently relevant contextual evidence was found. This does not prove the candidate lacks the skill."
+                "The closest passage did not contain sufficient supporting evidence. This does not prove the candidate lacks the skill."
             ),
             "alternative_evidence": alternatives
         })
@@ -249,25 +498,27 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
     score = round(weighted_total / total_weight, 2) if total_weight else 0.0
     required_score = round(required_total / required_weight, 2) if required_weight else None
     coverage = round(evidence_covered / len(requirements) * 100, 2)
-    required_count = sum(1 for r in requirements if r["priority"] == "required")
     explanation = (
-        f"Evaluated {len(requirements)} complete job criteria: {fully_matched} fully matched, "
+        f"Evaluated {len(requirements)} assessable job criteria: {fully_matched} fully supported, "
         f"{partial} partially supported, and {missing} without sufficient evidence. "
-        "Similarity is used to retrieve evidence, not as proof of competence."
+        f"Excluded {len(excluded)} employer-benefit statement(s). Similarity retrieves passages; "
+        "entity/context checks are also required before a match is awarded."
     )
     return {
         "score": score,
         "evidence_coverage": coverage,
         "evidence_covered_count": evidence_covered,
         "requirements_count": len(requirements),
+        "excluded_information_count": len(excluded),
         "fully_matched": fully_matched,
         "partial_matches": partial,
         "missing": missing,
         "required_without_evidence": required_without_evidence,
         "required_only_score": required_score,
-        "required_count": required_count,
+        "required_count": required_weight,
         "match_results": requirement_details,
         "requirements": requirements,
+        "excluded_job_information": excluded,
         "cv_evidence": evidence,
         "explanation": explanation
     }
