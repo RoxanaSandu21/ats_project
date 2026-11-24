@@ -923,7 +923,7 @@ def _assess_evidence(
             return "Partial Match", "named_skill_list_without_proficiency_depth", 50.0
         if evidence_type in ("experience_context", "context_window"):
             return "Partial Match", "named_technical_skill_in_experience_context", 50.0
-        if evidence_type == "action_statement" and coverage >= 0.80:
+        if evidence_type == "action_statement" and coverage >= 1.0:
             return "Full Match", "explicit_named_technical_skills_in_action_evidence", 80.0
         return "Partial Match", "partial_named_technical_skill_overlap", 50.0
 
