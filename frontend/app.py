@@ -17,8 +17,18 @@ def show_evaluation_details(bias_report, weighted_score=None):
     if weighted_score is not None:
         st.metric("Weighted compatibility", f"{weighted_score:.2f}%")
 
-    context_count = details.get("evidence_covered_count", 0)
-    criteria_count = details.get("requirements_count", 0)
+    saved_results = details.get("match_results", [])
+    if saved_results:
+        # Derive this count from stored statuses so older database evaluations
+        # are displayed correctly after the coverage definition changed.
+        context_count = sum(
+            1 for item in saved_results
+            if item.get("status") in ("Full Match", "Partial Match")
+        )
+        criteria_count = len(saved_results)
+    else:
+        context_count = details.get("evidence_covered_count", 0)
+        criteria_count = details.get("requirements_count", 0)
     cols = st.columns(5)
     cols[0].metric(
         "Criteria with direct/partial evidence",
