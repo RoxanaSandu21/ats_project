@@ -15,7 +15,9 @@ from services.nlp_service import (
     _group_job_requirements,
     _priority,
     calculate_hybrid_match_score,
+    extract_candidate_info,
     extract_cv_evidence,
+    _is_skills_list,
 )
 
 
@@ -215,7 +217,11 @@ class OllamaParityEvidenceTests(unittest.TestCase):
         self.assertEqual(result["evidence_covered_count"], 2)
         self.assertEqual(result["required_count"], 5)
         self.assertEqual(result["required_only_score"], 20.0)
+        self.assertEqual(result["required_only_percent"], 25.0)
         self.assertEqual(result["score"], 18.18)
+        self.assertEqual(result["ollama_compatible_score"], 18.18)
+        self.assertEqual(result["score_scale_max"], 80.0)
+        self.assertEqual(result["compatibility_percent"], 22.73)
 
     def test_sales_advisor_is_contextual_for_end_user_communication(self):
         evidence = {
@@ -299,6 +305,46 @@ class OllamaParityEvidenceTests(unittest.TestCase):
             evidence,
             0.85,
         )
+        self.assertEqual(status, "Full Match")
+        self.assertEqual(reason, "explicit_spoken_and_written_english_evidence")
+        self.assertEqual(points, 80.0)
+
+    def test_grouped_english_requirement_retains_spoken_and_written_constraint(self):
+        requirement = _group_job_requirements([
+            make_requirement(
+                "Excellent understanding of English – spoken and written;",
+                category="language",
+                criterion_type="qualification",
+            )
+        ])[0]
+        self.assertEqual(requirement["requirement"], "Language proficiency")
+
+        fluent_only = {
+            "label": "Languages",
+            "quote": "English — Fluent",
+            "text": "English — Fluent",
+            "evidence_type": "context",
+        }
+        status, reason, points = _assess_evidence(requirement, fluent_only, 0.9)
+        self.assertEqual(status, "Partial Match")
+        self.assertEqual(reason, "explicit_english_level_but_modes_not_both_proven")
+        self.assertEqual(points, 60.0)
+
+    def test_grouped_english_requirement_allows_full_match_when_both_modes_are_explicit(self):
+        requirement = _group_job_requirements([
+            make_requirement(
+                "Excellent understanding of English – spoken and written;",
+                category="language",
+                criterion_type="qualification",
+            )
+        ])[0]
+        evidence = {
+            "label": "Languages",
+            "quote": "English — Fluent, spoken and written",
+            "text": "English — Fluent, spoken and written",
+            "evidence_type": "context",
+        }
+        status, reason, points = _assess_evidence(requirement, evidence, 0.9)
         self.assertEqual(status, "Full Match")
         self.assertEqual(reason, "explicit_spoken_and_written_english_evidence")
         self.assertEqual(points, 80.0)
@@ -537,6 +583,174 @@ class OllamaParityEvidenceTests(unittest.TestCase):
             _evidence_support_level("Basic networking skills", evidence),
             "none",
         )
+
+    def test_social_networking_project_does_not_prove_computer_networking(self):
+        evidence = {
+            "label": "Project responsibility",
+            "quote": "Built a social networking application for students.",
+            "text": "Built a social networking application for students.",
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(
+            _evidence_support_level("Basic networking skills", evidence),
+            "none",
+        )
+
+    def test_network_configuration_task_is_direct_evidence(self):
+        evidence = {
+            "label": "IT operations responsibility",
+            "quote": "Configured routers, switches and DNS records for office LAN connectivity.",
+            "text": "Configured routers, switches and DNS records for office LAN connectivity.",
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(
+            _evidence_support_level("Basic networking skills", evidence),
+            "direct",
+        )
+
+    def test_networking_skill_list_is_contextual_not_direct_task_evidence(self):
+        evidence = {
+            "label": "Technical Skills",
+            "quote": "Networking, TCP/IP, DNS, DHCP",
+            "text": "Networking, TCP/IP, DNS, DHCP",
+            "evidence_type": "skills_list",
+        }
+        self.assertEqual(
+            _evidence_support_level("Basic networking skills", evidence),
+            "contextual",
+        )
+
+    def test_mailbox_or_sla_mention_without_monitoring_is_not_direct_evidence(self):
+        evidence = {
+            "label": "Tools and responsibilities",
+            "quote": "Shared mailbox, OLA, SLA",
+            "text": "Shared mailbox, OLA, SLA",
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(
+            _evidence_support_level("Mailbox and service-level monitoring", evidence),
+            "none",
+        )
+
+    def test_explicit_mailbox_and_sla_monitoring_is_direct_evidence(self):
+        evidence = {
+            "label": "Service Desk responsibility",
+            "quote": "Monitored the shared mailbox and tracked SLA performance.",
+            "text": "Monitored the shared mailbox and tracked SLA performance.",
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(
+            _evidence_support_level("Mailbox and service-level monitoring", evidence),
+            "direct",
+        )
+
+    def test_unrelated_management_action_does_not_validate_distant_mailbox_mention(self):
+        evidence = {
+            "label": "Experience context",
+            "quote": (
+                "Managed software delivery schedules and coordinated engineering "
+                "planning across several teams for multiple quarterly releases. "
+                "The role also used a shared mailbox for announcements."
+            ),
+            "text": (
+                "Managed software delivery schedules and coordinated engineering "
+                "planning across several teams for multiple quarterly releases. "
+                "The role also used a shared mailbox for announcements."
+            ),
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(
+            _evidence_support_level("Mailbox and service-level monitoring", evidence),
+            "none",
+        )
+
+    def test_unrelated_management_action_does_not_validate_distant_av_mention(self):
+        evidence = {
+            "label": "Project experience",
+            "quote": (
+                "Managed engineering schedules and coordinated several releases "
+                "across distributed product teams during the year. "
+                "The office had a video conference room."
+            ),
+            "text": (
+                "Managed engineering schedules and coordinated several releases "
+                "across distributed product teams during the year. "
+                "The office had a video conference room."
+            ),
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(
+            _evidence_support_level("Video, audio and audiovisual support", evidence),
+            "none",
+        )
+
+    def test_video_conference_mention_without_av_activity_is_not_direct(self):
+        evidence = {
+            "label": "Project context",
+            "quote": "Attended a video conference in the main conference room.",
+            "text": "Attended a video conference in the main conference room.",
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(
+            _evidence_support_level("Video, audio and audiovisual support", evidence),
+            "none",
+        )
+
+    def test_configuring_and_testing_av_equipment_is_direct_evidence(self):
+        evidence = {
+            "label": "AV support responsibility",
+            "quote": "Set up video-conferencing equipment and tested microphones and projectors.",
+            "text": "Set up video-conferencing equipment and tested microphones and projectors.",
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(
+            _evidence_support_level("Video, audio and audiovisual support", evidence),
+            "direct",
+        )
+
+    def test_generic_communication_feature_does_not_prove_end_user_support(self):
+        evidence = {
+            "label": "Software project",
+            "quote": "Created a communication feature that allows users to send messages.",
+            "text": "Created a communication feature that allows users to send messages.",
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(
+            _evidence_support_level("End-user and first-line support", evidence),
+            "none",
+        )
+
+    def test_explicit_communication_with_end_users_is_direct_evidence(self):
+        evidence = {
+            "label": "Support responsibility",
+            "quote": "Communicated with end users and resolved their access requests.",
+            "text": "Communicated with end users and resolved their access requests.",
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(
+            _evidence_support_level("End-user and first-line support", evidence),
+            "direct",
+        )
+
+    def test_phone_extraction_accepts_spaced_romanian_mobile_numbers(self):
+        info = extract_candidate_info(
+            "RESUME\nMaria Andriescu\n"
+            "maria@example.com | +40 735 473 598 | Iași, Romania"
+        )
+        self.assertEqual(info["full_name"], "Maria Andriescu")
+        self.assertEqual(info["email"], "maria@example.com")
+        self.assertEqual(info["phone"], "+40735473598")
+
+    def test_phone_extraction_keeps_local_romanian_format(self):
+        info = extract_candidate_info("John Doe\n0732 164 275")
+        self.assertEqual(info["full_name"], "John Doe")
+        self.assertEqual(info["phone"], "0732164275")
+
+    def test_skills_list_detection_recognizes_technologies_heading(self):
+        self.assertTrue(_is_skills_list("Technologies"))
+        self.assertTrue(_is_skills_list("Core Competencies:"))
+        self.assertTrue(_is_skills_list("Technical Skills: Python, Java"))
+        self.assertFalse(_is_skills_list("I used various technologies in this project."))
 
     def test_unrelated_software_project_does_not_prove_av_support(self):
         evidence = {
