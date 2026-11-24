@@ -309,6 +309,46 @@ class OllamaParityEvidenceTests(unittest.TestCase):
         self.assertEqual(reason, "explicit_spoken_and_written_english_evidence")
         self.assertEqual(points, 80.0)
 
+    def test_grouped_english_requirement_retains_spoken_and_written_constraint(self):
+        requirement = _group_job_requirements([
+            make_requirement(
+                "Excellent understanding of English – spoken and written;",
+                category="language",
+                criterion_type="qualification",
+            )
+        ])[0]
+        self.assertEqual(requirement["requirement"], "Language proficiency")
+
+        fluent_only = {
+            "label": "Languages",
+            "quote": "English — Fluent",
+            "text": "English — Fluent",
+            "evidence_type": "context",
+        }
+        status, reason, points = _assess_evidence(requirement, fluent_only, 0.9)
+        self.assertEqual(status, "Partial Match")
+        self.assertEqual(reason, "explicit_english_level_but_modes_not_both_proven")
+        self.assertEqual(points, 60.0)
+
+    def test_grouped_english_requirement_allows_full_match_when_both_modes_are_explicit(self):
+        requirement = _group_job_requirements([
+            make_requirement(
+                "Excellent understanding of English – spoken and written;",
+                category="language",
+                criterion_type="qualification",
+            )
+        ])[0]
+        evidence = {
+            "label": "Languages",
+            "quote": "English — Fluent, spoken and written",
+            "text": "English — Fluent, spoken and written",
+            "evidence_type": "context",
+        }
+        status, reason, points = _assess_evidence(requirement, evidence, 0.9)
+        self.assertEqual(status, "Full Match")
+        self.assertEqual(reason, "explicit_spoken_and_written_english_evidence")
+        self.assertEqual(points, 80.0)
+
     def test_software_debugging_is_contextual_not_direct_service_desk_evidence(self):
         evidence = {
             "label": "Junior Java Developer | Responsibility",
