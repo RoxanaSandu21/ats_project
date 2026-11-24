@@ -232,7 +232,7 @@ def _priority(text: str, criterion_type: str) -> Tuple[str, str]:
     # because a skill keyword appears in the advert, but because the posting
     # directly instructs the holder of the role to perform the task.
     if re.match(
-        r"^\\s*(?:you will|act as|provide|record|attempt to resolve)\\b",
+        r"^\s*(?:you will|act as|provide|record|attempt to resolve)\\b",
         text,
         re.IGNORECASE,
     ):
@@ -255,29 +255,29 @@ def _requirement_group_key(requirement: dict) -> str:
     )).casefold()
     category = requirement.get("category", "")
 
-    if category == "language" or re.search(r"\\benglish\\b|\\bspoken and written\\b", text):
+    if category == "language" or re.search(r"\benglish\\b|\\bspoken and written\\b", text):
         return "language"
-    if re.search(r"\\b(work under pressure|pressure|fast[- ]paced)\\b", text):
+    if re.search(r"\b(work under pressure|pressure|fast[- ]paced)\\b", text):
         return "working_under_pressure"
-    if re.search(r"\\b(audio[- ]visual|\\bav support\\b|video conference|video conferencing)\\b", text) or (
+    if re.search(r"\b(audio[- ]visual|\\bav support\\b|video conference|video conferencing)\\b", text) or (
         "video" in text and "audio" in text
     ):
         return "audiovisual_support"
-    if re.search(r"\\b(mailbox|ola|slas?|service level agreement)\\b", text):
+    if re.search(r"\b(mailbox|ola|slas?|service level agreement)\\b", text):
         return "service_level_monitoring"
     if re.search(
-        r"\\b(end[- ]?users?|point of contact|first[- ]line support|room bookings?|"
+        r"\b(end[- ]?users?|point of contact|first[- ]line support|room bookings?|"
         r"users experiencing|user support|communication)\\b",
         text,
     ):
         return "end_user_support"
     if re.search(
-        r"\\b(troubleshoot|incident|hardware|software|service requests?|"
+        r"\b(troubleshoot|incident|hardware|software|service requests?|"
         r"first point of contact|logging|tracking|resolve|documentation|support environment)\\b",
         text,
     ):
         return "incident_and_troubleshooting"
-    return "standalone:" + re.sub(r"\\W+", " ", requirement.get("requirement", "").casefold()).strip()
+    return "standalone:" + re.sub(r"\W+", " ", requirement.get("requirement", "").casefold()).strip()
 
 
 _GROUP_LABELS = {
