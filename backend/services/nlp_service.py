@@ -199,10 +199,15 @@ def _category(text: str, entities: List[dict]) -> str:
 
 def _criterion_type(text: str, category: str) -> str:
     lowered = text.casefold()
-    if category in ("language", "soft skill", "qualification", "technical skill"):
+    # Explicit qualification wording takes precedence over action-like words.
+    # For example, "troubleshooting experience" is a qualification, while
+    # "you will troubleshoot..." is a job responsibility.
+    if any(cue in lowered for cue in QUALIFICATION_CUES):
         return "qualification"
     if any(cue in lowered for cue in RESPONSIBILITY_CUES):
         return "responsibility"
+    if category in ("language", "soft skill", "qualification", "technical skill"):
+        return "qualification"
     return "job criterion"
 
 
