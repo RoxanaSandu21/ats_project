@@ -99,8 +99,12 @@ def upload_cv(job_id: int, file: UploadFile = File(...), db: Session = Depends(g
         "match_score": result["score"],
         "evaluation_summary": {
             "evidence_coverage": result.get("evidence_coverage", 0),
+            "evidence_covered_count": result.get("evidence_covered_count", 0),
+            "requirements_count": result.get("requirements_count", 0),
             "fully_matched": result.get("fully_matched", 0),
+            "partial_matches": result.get("partial_matches", 0),
             "transferable_contexts": result.get("transferable_contexts", 0),
+            "missing": result.get("missing", 0),
             "required_without_evidence": result.get("required_without_evidence", 0),
             "required_only_score": result.get("required_only_score")
         }
