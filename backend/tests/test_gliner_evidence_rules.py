@@ -551,5 +551,135 @@ class OllamaParityEvidenceTests(unittest.TestCase):
         )
 
 
+    def test_java_in_cv_skills_list_counts_as_partial_without_embedding_threshold(self):
+        requirement = {
+            "requirement": "Java development knowledge",
+            "category": "technical skill",
+            "criterion_type": "qualification",
+            "entities": [{"text": "Java", "type": "software"}],
+        }
+        evidence = {
+            "label": "Languages",
+            "quote": "Languages: C++, C, Java, JavaScript, TypeScript, Python",
+            "text": "Languages: C++, C, Java, JavaScript, TypeScript, Python",
+            "evidence_type": "skills_list",
+            "entities": [{"text": "Java", "type": "software"}],
+        }
+        status, reason, points = _assess_evidence(requirement, evidence, 0.18)
+        self.assertEqual(status, "Partial Match")
+        self.assertEqual(reason, "named_skill_list_without_proficiency_depth")
+        self.assertEqual(points, 50.0)
+
+    def test_java_does_not_match_java_script(self):
+        requirement = {
+            "requirement": "Java development knowledge",
+            "category": "technical skill",
+            "criterion_type": "qualification",
+            "entities": [{"text": "Java", "type": "software"}],
+        }
+        evidence = {
+            "label": "Languages",
+            "quote": "Languages: JavaScript, TypeScript",
+            "text": "Languages: JavaScript, TypeScript",
+            "evidence_type": "skills_list",
+            "entities": [{"text": "JavaScript", "type": "software"}],
+        }
+        status, reason, points = _assess_evidence(requirement, evidence, 0.95)
+        self.assertEqual(status, "Missing")
+        self.assertEqual(reason, "no_exact_named_technical_entity_evidence")
+        self.assertEqual(points, 0.0)
+
+    def test_spring_boot_and_springboot_are_treated_as_the_same_named_entity(self):
+        requirement = {
+            "requirement": "Spring Boot experience",
+            "category": "technical skill",
+            "criterion_type": "qualification",
+            "entities": [{"text": "Spring Boot", "type": "software"}],
+        }
+        evidence = {
+            "label": "Frameworks",
+            "quote": "Frameworks & Libraries: SpringBoot, React.js, Node.js",
+            "text": "Frameworks & Libraries: SpringBoot, React.js, Node.js",
+            "evidence_type": "skills_list",
+            "entities": [{"text": "SpringBoot", "type": "software"}],
+        }
+        status, reason, points = _assess_evidence(requirement, evidence, 0.21)
+        self.assertEqual(status, "Partial Match")
+        self.assertEqual(reason, "named_skill_list_without_proficiency_depth")
+        self.assertEqual(points, 50.0)
+
+    def test_junior_java_developer_role_is_partial_evidence_for_java_experience(self):
+        requirement = {
+            "requirement": "Professional Java experience",
+            "category": "experience",
+            "criterion_type": "qualification",
+            "entities": [{"text": "Java", "type": "software"}],
+        }
+        evidence = {
+            "label": "Junior Java Developer — Endava",
+            "quote": "Junior Java Developer Sep 2025 – Present. Endava",
+            "text": "Junior Java Developer Sep 2025 – Present. Endava",
+            "evidence_type": "experience_context",
+            "entities": [{"text": "Java", "type": "software"}],
+        }
+        status, reason, points = _assess_evidence(requirement, evidence, 0.24)
+        self.assertEqual(status, "Partial Match")
+        self.assertEqual(reason, "named_technical_skill_in_experience_context")
+        self.assertEqual(points, 50.0)
+
+    def test_java_project_action_can_fully_match_all_explicit_required_technologies(self):
+        requirement = {
+            "requirement": "Develop applications using Java and Spring Boot",
+            "category": "technical skill",
+            "criterion_type": "responsibility",
+            "entities": [
+                {"text": "Java", "type": "software"},
+                {"text": "Spring Boot", "type": "software"},
+            ],
+        }
+        evidence = {
+            "label": "Interview Management project",
+            "quote": (
+                "Built a web application using Java 21 and Spring Boot, "
+                "with JPA and REST API."
+            ),
+            "text": (
+                "Built a web application using Java 21 and Spring Boot, "
+                "with JPA and REST API."
+            ),
+            "evidence_type": "action_statement",
+            "entities": [
+                {"text": "Java", "type": "software"},
+                {"text": "SpringBoot", "type": "software"},
+            ],
+        }
+        status, reason, points = _assess_evidence(requirement, evidence, 0.28)
+        self.assertEqual(status, "Full Match")
+        self.assertEqual(reason, "explicit_named_technical_skills_in_action_evidence")
+        self.assertEqual(points, 80.0)
+
+    def test_partial_technology_coverage_does_not_become_a_full_match(self):
+        requirement = {
+            "requirement": "Develop applications using Java and Spring Boot",
+            "category": "technical skill",
+            "criterion_type": "responsibility",
+            "entities": [
+                {"text": "Java", "type": "software"},
+                {"text": "Spring Boot", "type": "software"},
+            ],
+        }
+        evidence = {
+            "label": "Web Gardening project",
+            "quote": "Designed and implemented a web-based application using Java.",
+            "text": "Designed and implemented a web-based application using Java.",
+            "evidence_type": "action_statement",
+            "entities": [{"text": "Java", "type": "software"}],
+        }
+        status, reason, points = _assess_evidence(requirement, evidence, 0.22)
+        self.assertEqual(status, "Partial Match")
+        self.assertEqual(reason, "partial_named_technical_skill_overlap")
+        self.assertEqual(points, 50.0)
+
+
 if __name__ == "__main__":
     unittest.main()
