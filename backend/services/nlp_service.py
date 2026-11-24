@@ -61,6 +61,15 @@ REQUIRED_PATTERN = re.compile(
     re.IGNORECASE
 )
 
+# Keep the same priority model as the Ollama prototype so the two approaches
+# can be compared on the same weighted scale.
+PRIORITY_WEIGHTS = {
+    "required": 3.0,
+    "preferred": 1.5,
+    "nice_to_have": 1.0,
+    "unspecified": 1.5,
+}
+
 
 def extract_text_from_pdf(pdf_path: str) -> str:
     """Extract raw text from a PDF while preserving page-level line breaks."""
@@ -218,13 +227,138 @@ def _priority(text: str, criterion_type: str) -> Tuple[str, str]:
         return "preferred", "explicit wording"
     if REQUIRED_PATTERN.search(text):
         return "required", "explicit wording"
-    # A stated qualification (e.g. English proficiency or troubleshooting
-    # experience) is treated as required unless the advert marks it preferred.
-    # Generic plural wording such as "support requirements" is not an explicit
-    # priority signal and must not accidentally mark a criterion as required.
+
+    # Core imperative duties are treated as expected responsibilities, not
+    # because a skill keyword appears in the advert, but because the posting
+    # directly instructs the holder of the role to perform the task.
+    if re.match(
+        r"^\\s*(?:you will|act as|provide|record|attempt to resolve)\\b",
+        text,
+        re.IGNORECASE,
+    ):
+        return "required", "imperative responsibility wording"
+
     if criterion_type == "qualification":
         return "required", "inferred from qualification wording"
     return "unspecified", "not stated in the advert"
+
+
+def _requirement_group_key(requirement: dict) -> str:
+    """Group overlapping duties into a small set of assessable job capabilities.
+
+    This is task-level grouping, not a vocabulary of technical skills. Original
+    source statements remain attached to each group for traceability.
+    """
+    text = " ".join((
+        requirement.get("requirement", ""),
+        requirement.get("source_text", ""),
+    )).casefold()
+    category = requirement.get("category", "")
+
+    if category == "language" or re.search(r"\\benglish\\b|\\bspoken and written\\b", text):
+        return "language"
+    if re.search(r"\\b(work under pressure|pressure|fast[- ]paced)\\b", text):
+        return "working_under_pressure"
+    if re.search(r"\\b(audio[- ]visual|\\bav support\\b|video conference|video conferencing)\\b", text) or (
+        "video" in text and "audio" in text
+    ):
+        return "audiovisual_support"
+    if re.search(r"\\b(mailbox|ola|slas?|service level agreement)\\b", text):
+        return "service_level_monitoring"
+    if re.search(
+        r"\\b(end[- ]?users?|point of contact|first[- ]line support|room bookings?|"
+        r"users experiencing|user support|communication)\\b",
+        text,
+    ):
+        return "end_user_support"
+    if re.search(
+        r"\\b(troubleshoot|incident|hardware|software|service requests?|"
+        r"first point of contact|logging|tracking|resolve|documentation|support environment)\\b",
+        text,
+    ):
+        return "incident_and_troubleshooting"
+    return "standalone:" + re.sub(r"\\W+", " ", requirement.get("requirement", "").casefold()).strip()
+
+
+_GROUP_LABELS = {
+    "end_user_support": "End-user and first-line support",
+    "incident_and_troubleshooting": "Troubleshooting and incident management",
+    "audiovisual_support": "Video, audio and audiovisual support",
+    "service_level_monitoring": "Mailbox and service-level monitoring",
+    "language": "Language proficiency",
+    "working_under_pressure": "Working under pressure",
+}
+
+
+def _group_job_requirements(requirements: List[dict]) -> List[dict]:
+    """Collapse overlapping job duties while retaining every original statement."""
+    groups: Dict[str, List[dict]] = {}
+    order: List[str] = []
+    for requirement in requirements:
+        key = _requirement_group_key(requirement)
+        if key not in groups:
+            groups[key] = []
+            order.append(key)
+        groups[key].append(requirement)
+
+    grouped = []
+    for key in order:
+        members = groups[key]
+        priorities = [item.get("priority", "unspecified") for item in members]
+        if "required" in priorities:
+            priority = "required"
+        elif "preferred" in priorities:
+            priority = "preferred"
+        elif "nice_to_have" in priorities:
+            priority = "nice_to_have"
+        else:
+            priority = "unspecified"
+
+        source_details = []
+        entities = []
+        seen_entities = set()
+        for item in members:
+            source_details.append({
+                "requirement": item["requirement"],
+                "source_text": item["source_text"],
+                "category": item["category"],
+                "criterion_type": item["criterion_type"],
+                "priority": item["priority"],
+                "entities": item.get("entities", []),
+            })
+            for entity in item.get("entities", []):
+                entity_key = (entity.get("text", "").casefold(), entity.get("type", ""))
+                if entity_key not in seen_entities:
+                    entities.append(entity)
+                    seen_entities.add(entity_key)
+
+        first = members[0]
+        if key.startswith("standalone:"):
+            label = first["requirement"]
+        else:
+            label = _GROUP_LABELS[key]
+
+        priority_sources = {item.get("priority_source", "") for item in members}
+        grouped.append({
+            "requirement": label,
+            "category": first.get("category", "job criterion"),
+            "criterion_type": (
+                "qualification" if all(
+                    item.get("criterion_type") == "qualification" for item in members
+                ) else "responsibility"
+            ),
+            "priority": priority,
+            "priority_source": (
+                next(iter(priority_sources)) if len(priority_sources) == 1
+                else "combined from grouped source statements"
+            ),
+            "entities": entities,
+            "source_text": " | ".join(item["source_text"] for item in members),
+            "source_statements": [item["source_text"] for item in members],
+            "source_details": source_details,
+            "group_key": key,
+        })
+    return grouped
 
 
 def extract_job_criteria(job_description: str) -> Tuple[List[dict], List[dict]]:
@@ -273,7 +407,7 @@ def extract_job_criteria(job_description: str) -> Tuple[List[dict], List[dict]]:
             "entities": [{"text": entity["text"], "type": entity["type"]} for entity in entities],
             "source_text": sentence
         })
-    return requirements, excluded
+    return _group_job_requirements(requirements), excluded
 
 
 def extract_job_requirements(job_description: str) -> List[dict]:
