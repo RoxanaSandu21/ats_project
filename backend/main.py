@@ -149,18 +149,18 @@ def get_leaderboard(job_id: int, db: Session = Depends(get_db)):
                 # normalized 0–100 scale so old and new rows remain comparable.
                 "match_score": (
                     ev.match_score
-                    if (ev.bias_report or {}).get("match_details", {}).get("score_version")
+                    if ((ev.bias_report or {}).get("match_details") or {}).get("score_version")
                     == "normalized_100_v2"
                     else round(float(ev.match_score or 0.0) / 80.0 * 100.0, 2)
                 ),
                 "ollama_compatible_score": (
-                    (ev.bias_report or {}).get("match_details", {}).get("ollama_compatible_score")
-                    if (ev.bias_report or {}).get("match_details", {}).get("score_version")
+                    ((ev.bias_report or {}).get("match_details") or {}).get("ollama_compatible_score")
+                    if ((ev.bias_report or {}).get("match_details") or {}).get("score_version")
                     == "normalized_100_v2"
                     else ev.match_score
                 ),
                 "score_version": (
-                    (ev.bias_report or {}).get("match_details", {}).get("score_version")
+                    ((ev.bias_report or {}).get("match_details") or {}).get("score_version")
                     or "legacy_ollama_0_80"
                 ),
                 "bias_report": ev.bias_report,
