@@ -14,12 +14,14 @@ menu = st.sidebar.selectbox("Navigation", ["Manage Jobs", "Evaluate Candidates"]
 def show_evaluation_details(bias_report):
     details = (bias_report or {}).get("match_details", {})
     st.markdown("#### 📊 Evaluation overview")
-    cols = st.columns(4)
-    cols[0].metric("Evidence coverage", f"{details.get('evidence_coverage', 0)}%")
+    cols = st.columns(5)
+    cols[0].metric("Evidence & context coverage", f"{details.get('evidence_coverage', 0)}%")
     cols[1].metric("Fully matched", details.get("fully_matched", 0))
-    cols[2].metric("Required without evidence", details.get("required_without_evidence", 0))
+    cols[2].metric("Required without direct evidence", details.get("required_without_evidence", 0))
     required_score = details.get("required_only_score")
     cols[3].metric("Required-only score", f"{required_score}%" if required_score is not None else "N/A")
+                        cols[4].metric("Transferable context", summary.get("transferable_contexts", 0))
+    cols[4].metric("Transferable context", details.get("transferable_contexts", 0))
 
     st.caption(details.get("explanation", "No evaluation explanation available."))
     results = details.get("match_results", [])
@@ -27,7 +29,7 @@ def show_evaluation_details(bias_report):
         st.markdown("#### 🔍 Requirement-by-requirement evidence")
         for index, item in enumerate(results, 1):
             status = item.get("status", "Not assessed")
-            icon = "🟢" if status == "Full Match" else "🟡" if status == "Partial Match" else "🔴"
+            icon = "🟢" if status == "Full Match" else "🟡" if status in ("Partial Match", "Transferable Context") else "🔴"
             priority = item.get("priority", "unspecified").title()
             with st.expander(f"{icon} {index}. {item.get('requirement', 'Criterion')} — {status} ({priority})"):
                 st.write(f"**Category:** {item.get('category', 'Not classified')}")
@@ -37,7 +39,7 @@ def show_evaluation_details(bias_report):
                 st.write(f"**Evidence assessment:** {item.get('evidence_strength', 'Not available')}")
                 excerpt = item.get("cv_evidence", "")
                 if excerpt:
-                    st.markdown("**Retrieved supporting CV excerpt**")
+                    st.markdown("**Potentially transferable CV context (not direct evidence)**" if status == "Transferable Context" else "**Retrieved supporting CV excerpt**")
                     st.info(excerpt)
                 else:
                     closest = item.get("closest_evidence", {})
@@ -156,10 +158,10 @@ elif menu == "Evaluate Candidates":
                             f"Processed: {data['full_name']} | Weighted compatibility: {data['match_score']}%"
                         )
                         summary = data.get("evaluation_summary", {})
-                        cols = st.columns(4)
-                        cols[0].metric("Evidence coverage", f"{summary.get('evidence_coverage', 0)}%")
+                        cols = st.columns(5)
+                        cols[0].metric("Evidence & context coverage", f"{summary.get('evidence_coverage', 0)}%")
                         cols[1].metric("Fully matched", summary.get("fully_matched", 0))
-                        cols[2].metric("Required without evidence", summary.get("required_without_evidence", 0))
+                        cols[2].metric("Required without direct evidence", summary.get("required_without_evidence", 0))
                         required_score = summary.get("required_only_score")
                         cols[3].metric("Required-only score", f"{required_score}%" if required_score is not None else "N/A")
                     else:
