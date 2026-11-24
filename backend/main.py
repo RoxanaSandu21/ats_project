@@ -79,7 +79,7 @@ def upload_cv(job_id: int, file: UploadFile = File(...), db: Session = Depends(g
     bias_report = evaluate_bias(cv_text)
     bias_report["match_details"] = {
         key: result.get(key) for key in (
-            "explanation", "match_results", "requirements", "cv_evidence",
+            "explanation", "match_results", "requirements", "excluded_job_information", "cv_evidence",
             "evidence_coverage", "evidence_covered_count", "requirements_count",
             "fully_matched", "partial_matches", "missing",
             "required_without_evidence", "required_only_score", "required_count"
