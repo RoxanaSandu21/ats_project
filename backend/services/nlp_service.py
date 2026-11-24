@@ -258,8 +258,8 @@ def _requirement_group_key(requirement: dict) -> str:
     if re.search(r"\b(mailbox|ola|slas?|service level agreement)\b", text):
         return "service_level_monitoring"
 
-    # Incident recording belongs with incident/service-request handling even
-    # when the ticket refers to a video-conference request.
+    # Explicit incident/request logging stays with service-desk incident work,
+    # even when the logged request happens to concern a video conference.
     if (
         re.search(r"\b(record|recording|log|logging|tracking|track)\b", text)
         and re.search(r"\b(incident|service request|ticket|request)\b", text)
@@ -271,6 +271,7 @@ def _requirement_group_key(requirement: dict) -> str:
     ):
         return "audiovisual_support"
 
+    # First-contact resolution and room-booking support remain end-user duties.
     if re.search(
         r"\b(end[- ]?users?|point of contact|first[- ]line support|room bookings?|"
         r"users experiencing|user support|communication|first point of contact)\b",
@@ -813,8 +814,11 @@ def _assess_evidence(
         if "english" in requirement_text:
             speaks = bool(re.search(r"\b(spoken|speaking)\b", quote))
             writes = bool(re.search(r"\b(written|writing)\b", quote))
-            if ("spoken" in requirement_text and "written" in requirement_text) and not (speaks and writes):
+            asks_both = "spoken" in requirement_text and "written" in requirement_text
+            if asks_both and not (speaks and writes):
                 return "Partial Match", "explicit_english_level_but_modes_not_both_proven", 60.0
+            if asks_both and speaks and writes:
+                return "Full Match", "explicit_spoken_and_written_english_evidence", 80.0
 
         if evidence_type in ("skills_list", "experience_context", "context_window"):
             return "Partial Match", "explicit_but_limited_or_context_only_evidence", 50.0
