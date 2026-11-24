@@ -37,10 +37,19 @@ def show_evaluation_details(bias_report):
                 st.write(f"**Evidence assessment:** {item.get('evidence_strength', 'Not available')}")
                 excerpt = item.get("cv_evidence", "")
                 if excerpt:
-                    st.markdown("**Supporting CV excerpt**")
+                    st.markdown("**Retrieved supporting CV excerpt**")
                     st.info(excerpt)
                 else:
-                    st.warning("No sufficiently relevant CV excerpt was found.")
+                    closest = item.get("closest_evidence", {})
+                    if closest.get("text"):
+                        st.markdown("**Closest retrieved CV passage (not counted as evidence)**")
+                        st.info(
+                            f"{closest.get('text', '')}\n\n"
+                            f"Passage type: {closest.get('evidence_type', 'context')} | "
+                            f"Retrieval similarity: {round(closest.get('similarity', 0) * 100, 1)}%"
+                        )
+                    else:
+                        st.warning("No substantive CV passage was available for comparison.")
                 st.caption(item.get("evidence_note", ""))
                 alternatives = item.get("alternative_evidence", [])
                 if alternatives:
