@@ -47,7 +47,8 @@ ACTION_CUES = (
     "assisted", "coordinated", "recorded", "monitored", "tested",
     "documented", "handled", "worked", "collaborated", "contributed",
     "delivered", "configured", "installed", "diagnosed", "helped",
-    "improved", "deployed", "analysed", "analyzed"
+    "improved", "deployed", "analysed", "analyzed", "executed", "performed",
+    "conducted"
 )
 
 NICE_TO_HAVE_PATTERN = re.compile(
@@ -734,12 +735,14 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
             r"\b(monitored|monitoring|managed|tracked) (?:the )?(?:mailbox|sla|ola|service levels?)\b",
         )) else "none"
 
+    incident_logging_present = has((
+        r"\b(record(?:ed|ing)?|log(?:ged|ging)?|track(?:ed|ing)?)\b.{0,40}\bincidents?\b",
+        r"\b(incident log(?:ging)?|logged incidents?|tracked incidents?|service tickets?|"
+        r"support tickets?|ticketing system|service requests?)\b",
+    ))
+
     if any(term in requirement for term in ("incident", "service request", "logging", "tracking")):
-        if has((
-            r"\b(record(?:ed|ing)?|log(?:ged|ging)?|track(?:ed|ing)?)\b.{0,40}\bincidents?\b",
-            r"\b(incident log(?:ging)?|logged incidents?|tracked incidents?|service tickets?|"
-            r"support tickets?|ticketing system|service requests?)\b",
-        )):
+        if incident_logging_present:
             if "troubleshoot" in requirement or "support environment" in requirement:
                 support_environment = has((
                     r"\b(service desk|help desk|technical support|it support|user support|customer support)\b",
@@ -755,13 +758,17 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
     if "troubleshoot" in requirement or "support environment" in requirement:
         support_environment = has((
             r"\b(service desk|help desk|technical support|it support|user support|customer support)\b",
-            r"\b(incident management|support tickets|support environment|helpdesk)\b",
+            r"\b(incident management|support tickets?|support environment|helpdesk)\b",
         ))
         troubleshooting_task = has((
             r"\b(troubleshoot(?:ing|ed)?|diagnos(?:ed|ing|is)|automated system diagnostics)\b",
             r"\b(resolved|investigated)\b.{0,60}\b(technical )?(?:issues|incidents|tickets)\b",
         ))
         if support_environment and troubleshooting_task:
+            # A combined incident/troubleshooting criterion is complete only
+            # when the CV also demonstrates incident or ticket logging.
+            if "incident" in requirement and not incident_logging_present:
+                return "contextual"
             return "direct"
         if support_environment:
             return "contextual"
@@ -797,6 +804,9 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
             r"\b(client advisor|account manager|account executive)\b",
             r"\b(teacher|tutor|instructor|trainer|lecturer|educator)\b",
             r"\bretail associate\b",
+            r"\b(service desk|help desk|helpdesk) analyst\b",
+            r"\bit support (?:analyst|specialist|assistant|technician)\b",
+            r"\btechnical support (?:analyst|specialist|assistant|technician)\b",
         )):
             return "contextual"
         # Generic technical support is direct only when the excerpt describes
@@ -965,14 +975,12 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
         )
         similarity_matrix = util.cos_sim(source_embeddings, evidence_embeddings)
         best_similarity_per_evidence = similarity_matrix.max(dim=0).values
+        # Evidence rules must inspect the canonical grouped capability, not a
+        # concatenation of every original sentence. Mixing unrelated phrases
+        # (e.g. "video conference" in an incident-logging sentence) can cause
+        # an earlier keyword rule to mask the actual capability being assessed.
         grouped_assessment_requirement = dict(req)
-        grouped_assessment_requirement["requirement"] = " ".join(
-            [req.get("requirement", "")]
-            + [
-                f"{item.get('requirement', '')} {item.get('source_text', '')}"
-                for item in source_details
-            ]
-        )
+        grouped_assessment_requirement["requirement"] = req.get("requirement", "")
 
         candidate_indices = [
             index for index, item in enumerate(evidence)
