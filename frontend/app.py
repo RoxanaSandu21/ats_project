@@ -5,75 +5,164 @@ import pandas as pd
 API_URL = "http://127.0.0.1:8000"
 
 st.set_page_config(page_title="ATS AI Evaluation", page_icon="📊", layout="wide")
-
 st.title("📄 AI-Powered ATS & Algorithmic Fairness Analysis")
-st.write("Master's Project — Semantic CV-Job Matching via Zero-Shot NER (GLiNER) and Vector Embeddings.")
+st.write("Master's Project — GLiNER extraction, contextual semantic retrieval, and explainable CV-job evaluation.")
 
 menu = st.sidebar.selectbox("Navigation", ["Manage Jobs", "Evaluate Candidates"])
+
+
+def show_evaluation_details(bias_report):
+    details = (bias_report or {}).get("match_details", {})
+    st.markdown("#### 📊 Evaluation overview")
+    cols = st.columns(4)
+    cols[0].metric("Evidence coverage", f"{details.get('evidence_coverage', 0)}%")
+    cols[1].metric("Fully matched", details.get("fully_matched", 0))
+    cols[2].metric("Required without evidence", details.get("required_without_evidence", 0))
+    required_score = details.get("required_only_score")
+    cols[3].metric("Required-only score", f"{required_score}%" if required_score is not None else "N/A")
+
+    st.caption(details.get("explanation", "No evaluation explanation available."))
+    results = details.get("match_results", [])
+    if results:
+        st.markdown("#### 🔍 Requirement-by-requirement evidence")
+        for index, item in enumerate(results, 1):
+            status = item.get("status", "Not assessed")
+            icon = "🟢" if status == "Full Match" else "🟡" if status == "Partial Match" else "🔴"
+            priority = item.get("priority", "unspecified").title()
+            with st.expander(f"{icon} {index}. {item.get('requirement', 'Criterion')} — {status} ({priority})"):
+                st.write(f"**Category:** {item.get('category', 'Not classified')}")
+                st.write(f"**Semantic retrieval similarity:** {item.get('confidence', 0)}%")
+                st.write(f"**Evidence assessment:** {item.get('evidence_strength', 'Not available')}")
+                excerpt = item.get("cv_evidence", "")
+                if excerpt:
+                    st.markdown("**Supporting CV excerpt**")
+                    st.info(excerpt)
+                else:
+                    st.warning("No sufficiently relevant CV excerpt was found.")
+                st.caption(item.get("evidence_note", ""))
+                alternatives = item.get("alternative_evidence", [])
+                if alternatives:
+                    st.markdown("**Other retrieved excerpts (not automatically treated as proof)**")
+                    for alternative in alternatives:
+                        st.write(f"• {alternative.get('text', '')} — similarity {alternative.get('similarity', 0)}")
+
+    requirements = details.get("requirements", [])
+    if requirements:
+        with st.expander("📌 Extracted job criteria"):
+            st.dataframe(pd.DataFrame(requirements), use_container_width=True, hide_index=True)
+
+    cv_evidence = details.get("cv_evidence", [])
+    if cv_evidence:
+        with st.expander("📄 Extracted CV context"):
+            st.dataframe(
+                pd.DataFrame([{"CV excerpt": item.get("text", ""),
+                               "GLiNER entities": ", ".join(
+                                   entity.get("text", "") for entity in item.get("entities", [])
+                               )} for item in cv_evidence]),
+                use_container_width=True, hide_index=True
+            )
+
+    st.markdown("#### ⚖️ Algorithmic fairness screening")
+    st.json({k: v for k, v in (bias_report or {}).items() if k != "match_details"})
+    st.caption("The fairness check is heuristic and limited to configured textual indicators. A 'Low' result does not establish that the model or recruitment process is fair.")
+
 
 if menu == "Manage Jobs":
     st.header("📌 Add New Job Post")
     with st.form("job_form"):
         title = st.text_input("Job Title")
-        description = st.text_area("Job Description (Requirements & Tech Stack)")
-        if st.form_submit_button("Create Job"):
+        description = st.text_area("Job Description (responsibilities and requirements)", height=220)
+        submitted = st.form_submit_button("Create Job")
+        if submitted:
             if title and description:
-                res = requests.post(f"{API_URL}/jobs/", json={"title": title, "description": description})
-                if res.status_code == 200:
-                    st.success("Job created successfully!")
+                try:
+                    response = requests.post(
+                        f"{API_URL}/jobs/",
+                        json={"title": title, "description": description},
+                        timeout=30
+                    )
+                    if response.status_code == 200:
+                        st.success("Job created successfully!")
+                    else:
+                        st.error(f"Could not create job: {response.text}")
+                except requests.RequestException as exc:
+                    st.error(f"API connection error: {exc}")
             else:
                 st.warning("All fields are required.")
 
     st.subheader("📋 Active Jobs")
-    res = requests.get(f"{API_URL}/jobs/")
-    if res.status_code == 200 and res.json():
-        for job in res.json():
-            with st.expander(f"🔹 {job['title']} (ID: {job['id']})"):
-                st.write(job['description'])
+    try:
+        response = requests.get(f"{API_URL}/jobs/", timeout=15)
+        if response.status_code == 200 and response.json():
+            for job in response.json():
+                with st.expander(f"🔹 {job['title']} (ID: {job['id']})"):
+                    st.write(job["description"])
+        elif response.status_code == 200:
+            st.info("No jobs have been created yet.")
+    except requests.RequestException as exc:
+        st.error(f"API connection error: {exc}")
 
 elif menu == "Evaluate Candidates":
     st.header("📂 Candidate CV Compatibility")
-    
-    res = requests.get(f"{API_URL}/jobs/")
-    if res.status_code == 200 and res.json():
-        jobs = {f"{j['title']} (ID: {j['id']})": j['id'] for j in res.json()}
+    try:
+        response = requests.get(f"{API_URL}/jobs/", timeout=15)
+        response.raise_for_status()
+        available_jobs = response.json()
+    except requests.RequestException as exc:
+        st.error(f"Could not load jobs: {exc}")
+        available_jobs = []
+
+    if available_jobs:
+        jobs = {f"{job['title']} (ID: {job['id']})": job["id"] for job in available_jobs}
         selected_job = st.selectbox("Select Target Job", list(jobs.keys()))
         job_id = jobs[selected_job]
-        
+
         st.divider()
         uploaded_file = st.file_uploader("Upload CV (.pdf)", type=["pdf"])
-        
         if uploaded_file and st.button("Process & Evaluate CV"):
-            with st.spinner("Extracting entities and computing semantic overlap..."):
+            with st.spinner("Extracting job criteria and CV context, then retrieving evidence..."):
                 files = {"file": (uploaded_file.name, uploaded_file.getvalue(), "application/pdf")}
-                r = requests.post(f"{API_URL}/jobs/{job_id}/upload-cv/", files=files)
-                if r.status_code == 200:
-                    data = r.json()
-                    st.success(f"Processed: {data['full_name']} | Compatibility: {data['match_score']}%")
-        
+                try:
+                    result = requests.post(
+                        f"{API_URL}/jobs/{job_id}/upload-cv/",
+                        files=files,
+                        timeout=900
+                    )
+                    if result.status_code == 200:
+                        data = result.json()
+                        st.success(
+                            f"Processed: {data['full_name']} | Weighted compatibility: {data['match_score']}%"
+                        )
+                        summary = data.get("evaluation_summary", {})
+                        cols = st.columns(4)
+                        cols[0].metric("Evidence coverage", f"{summary.get('evidence_coverage', 0)}%")
+                        cols[1].metric("Fully matched", summary.get("fully_matched", 0))
+                        cols[2].metric("Required without evidence", summary.get("required_without_evidence", 0))
+                        required_score = summary.get("required_only_score")
+                        cols[3].metric("Required-only score", f"{required_score}%" if required_score is not None else "N/A")
+                    else:
+                        st.error(f"Evaluation failed: {result.text}")
+                except requests.RequestException as exc:
+                    st.error(f"API request failed: {exc}")
+
         st.divider()
-        st.subheader("🏆 Live Leaderboard & AI Justification")
-        
-        lb_res = requests.get(f"{API_URL}/jobs/{job_id}/leaderboard/")
-        if lb_res.status_code == 200 and lb_res.json():
-            for idx, cand in enumerate(lb_res.json(), 1):
-                color = "🟢" if cand['match_score'] >= 75 else "🟡" if cand['match_score'] >= 50 else "🔴"
-                with st.expander(f"#{idx} - {cand['full_name']} {color} ({cand['match_score']}%)"):
-                    st.write(f"**Contact:** {cand['email']} | {cand['phone']}")
-                    
-                    st.markdown("#### 🔍 Structural Matching Evidence")
-                    match_details = cand['bias_report'].get("match_details", {})
-                    st.write(match_details.get("explanation", ""))
-                    
-                    results = match_details.get("match_results", [])
-                    if results:
-                        df = pd.DataFrame(results)
-                        def highlight(val):
-                            if val == 'Full Match': return 'background-color: #c6efce; color: #006100'
-                            if val == 'Partial Match': return 'background-color: #ffeb9c; color: #9c5700'
-                            if val == 'Missing': return 'background-color: #ffc7ce; color: #9c0006'
-                            return ''
-                        st.dataframe(df.style.map(highlight, subset=['status']), use_container_width=True)
-                    
-                    st.markdown("#### ⚖️ Algorithmic Fairness Check")
-                    st.json({k: v for k, v in cand['bias_report'].items() if k != 'match_details'})
+        st.subheader("🏆 Live Leaderboard & Explainable Evidence")
+        try:
+            leaderboard_response = requests.get(
+                f"{API_URL}/jobs/{job_id}/leaderboard/", timeout=30
+            )
+            leaderboard_response.raise_for_status()
+            leaderboard = leaderboard_response.json()
+            if leaderboard:
+                for index, candidate in enumerate(leaderboard, 1):
+                    score = candidate.get("match_score", 0)
+                    color = "🟢" if score >= 75 else "🟡" if score >= 50 else "🔴"
+                    with st.expander(f"#{index} — {candidate.get('full_name', 'Unknown')} {color} ({score}%)"):
+                        st.write(f"**Contact:** {candidate.get('email', 'Unspecified')} | {candidate.get('phone', 'Unspecified')}")
+                        show_evaluation_details(candidate.get("bias_report", {}))
+            else:
+                st.info("No candidates have been evaluated for this job yet.")
+        except requests.RequestException as exc:
+            st.error(f"Could not load the leaderboard: {exc}")
+    else:
+        st.info("Create a job first in the Manage Jobs section.")
