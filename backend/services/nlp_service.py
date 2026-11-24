@@ -87,7 +87,7 @@ def _looks_like_heading(line: str) -> bool:
     # Short title-case / uppercase lines are usually CV headings or role titles.
     letters = [char for char in line if char.isalpha()]
     if letters and (all(char.isupper() for char in letters) or
-                    sum(word[:1].isupper() for word in words if word) >= max(2, len(words) - 1)):
+                    sum(word[:1].isupper() for word in words if word) >= max(2, len(words) - 2)):
         return True
     return False
 
