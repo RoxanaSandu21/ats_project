@@ -1,4 +1,5 @@
 import unittest
+from unittest.mock import patch
 
 from services.nlp_service import (
     PRIORITY_WEIGHTS,
@@ -7,6 +8,7 @@ from services.nlp_service import (
     _evidence_support_level,
     _group_job_requirements,
     _priority,
+    extract_cv_evidence,
 )
 
 
@@ -230,6 +232,77 @@ class OllamaParityEvidenceTests(unittest.TestCase):
             "evidence_type": "action_statement",
         }
         self.assertEqual(_evidence_support_level(requirement, support_role), "direct")
+
+    def test_incident_logging_alone_is_partial_for_grouped_troubleshooting(self):
+        requirement = (
+            "Troubleshooting and incident management. You will troubleshoot hardware "
+            "and software problems. Incident logging and tracking."
+        )
+        evidence = {
+            "label": "Support role responsibility",
+            "quote": "Recorded all user incidents in the service desk ticketing system.",
+            "text": "Recorded all user incidents in the service desk ticketing system.",
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(_evidence_support_level(requirement, evidence), "contextual")
+
+        direct_evidence = {
+            "label": "IT Service Desk | Responsibility",
+            "quote": (
+                "Worked on the IT service desk, diagnosed hardware and software issues, "
+                "and recorded incidents in the support ticketing system."
+            ),
+            "text": (
+                "Worked on the IT service desk, diagnosed hardware and software issues, "
+                "and recorded incidents in the support ticketing system."
+            ),
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(_evidence_support_level(requirement, direct_evidence), "direct")
+
+    def test_english_marker_survives_deduplication_with_context_windows(self):
+        writing_sample = (
+            "Developed a mobile application that helps users monitor and improve "
+            "their basic needs through real-time feedback."
+        )
+        with patch("services.nlp_service._unique_entities", return_value=[]):
+            with patch("services.nlp_service._looks_like_english_resume", return_value=True):
+                with patch(
+                    "services.nlp_service._find_english_writing_sample",
+                    return_value=writing_sample,
+                ):
+                    evidence = extract_cv_evidence(writing_sample)
+
+        matching = [
+            item for item in evidence
+            if item.get("text") == writing_sample
+        ]
+        self.assertEqual(len(matching), 1)
+        self.assertTrue(matching[0].get("is_english_writing_sample"))
+        self.assertEqual(_evidence_support_level(
+            "Excellent understanding of English spoken and written",
+            matching[0],
+        ), "contextual")
+
+    def test_role_date_context_window_keeps_sales_role_together(self):
+        source = (
+            "Business Sales Advisor\n"
+            "Vodafone\n"
+            "February 2025 – September 2025\n"
+            "Mathematics and Computer Science Teacher\n"
+            "Matematica.md\n"
+            "December 2021 – June 2024"
+        )
+        with patch("services.nlp_service._unique_entities", return_value=[]):
+            evidence = extract_cv_evidence(source)
+
+        role_context = [
+            item for item in evidence
+            if item.get("evidence_type") == "experience_context"
+            and "Business Sales Advisor" in item.get("quote", "")
+        ]
+        self.assertTrue(role_context)
+        self.assertTrue(any("February 2025" in item["quote"] for item in role_context))
 
     def test_role_title_does_not_prove_working_under_pressure(self):
         evidence = {
