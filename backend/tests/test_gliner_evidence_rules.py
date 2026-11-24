@@ -658,6 +658,128 @@ class OllamaParityEvidenceTests(unittest.TestCase):
         self.assertEqual(reason, "explicit_named_technical_skills_in_action_evidence")
         self.assertEqual(points, 80.0)
 
+    def test_java_cv_projects_and_skill_sections_are_retrieved_without_embedding_cutoff(self):
+        import torch
+
+        def technical_requirement(text, entities):
+            return {
+                "requirement": text,
+                "source_text": text,
+                "category": "technical skill",
+                "criterion_type": "qualification",
+                "priority": "required",
+                "priority_source": "explicit wording",
+                "entities": entities,
+            }
+
+        raw_requirements = [
+            technical_requirement(
+                "Strong knowledge of Java",
+                [{"text": "Java", "type": "language"}],
+            ),
+            technical_requirement(
+                "Practical experience developing with Java and Spring Boot",
+                [
+                    {"text": "Java", "type": "language"},
+                    {"text": "Spring Boot", "type": "software"},
+                ],
+            ),
+            technical_requirement(
+                "Experience building REST APIs",
+                [{"text": "REST API", "type": "technical skill"}],
+            ),
+            technical_requirement(
+                "Experience with microservices architecture",
+                [{"text": "microservices", "type": "technical skill"}],
+            ),
+        ]
+        evidence = [
+            {
+                "text": "Languages: C++, C, Java, JavaScript, TypeScript, Python, PHP, HTML, CSS",
+                "quote": "Languages: C++, C, Java, JavaScript, TypeScript, Python, PHP, HTML, CSS",
+                "label": "CV skills",
+                "type": "skills_list",
+                "evidence_type": "skills_list",
+                "entities": [{"text": "Java", "type": "language"}],
+            },
+            {
+                "text": "Junior Java Developer Sep 2025 – present Endava",
+                "quote": "Junior Java Developer Sep 2025 – present Endava",
+                "label": "Junior Java Developer — Endava",
+                "type": "experience_context",
+                "evidence_type": "experience_context",
+                "entities": [{"text": "Java", "type": "language"}],
+            },
+            {
+                "text": (
+                    "Built a web application for recruiters to schedule and manage interviews, "
+                    "assign tests and questions, and evaluate candidates through automated score "
+                    "calculation based on interview performance. Tools Used: Java 21, Spring Boot, "
+                    "HTML, CSS, JavaScript, JPA, REST API"
+                ),
+                "quote": (
+                    "Built a web application for recruiters to schedule and manage interviews, "
+                    "assign tests and questions, and evaluate candidates through automated score "
+                    "calculation based on interview performance. Tools Used: Java 21, Spring Boot, "
+                    "HTML, CSS, JavaScript, JPA, REST API"
+                ),
+                "label": "Interview Management project",
+                "type": "action_statement",
+                "evidence_type": "action_statement",
+                "entities": [
+                    {"text": "Java", "type": "language"},
+                    {"text": "SpringBoot", "type": "software"},
+                    {"text": "REST API", "type": "technical skill"},
+                ],
+            },
+        ]
+
+        class FixedEmbeddingModel:
+            def encode(self, texts, **kwargs):
+                return torch.ones((len(texts), 8), dtype=torch.float32)
+
+        with patch(
+            "services.nlp_service.extract_job_criteria",
+            return_value=(raw_requirements, []),
+        ):
+            with patch(
+                "services.nlp_service.extract_cv_evidence",
+                return_value=evidence,
+            ):
+                with patch(
+                    "services.nlp_service.embedding_model",
+                    FixedEmbeddingModel(),
+                ):
+                    result = calculate_hybrid_match_score(
+                        "Software Engineer (Java)",
+                        "Junior Java Developer with a Java and Spring Boot recruiter application.",
+                    )
+
+        by_requirement = {
+            item["requirement"]: item for item in result["match_results"]
+        }
+        self.assertEqual(
+            by_requirement["Strong knowledge of Java"]["status"],
+            "Full Match",
+        )
+        self.assertEqual(
+            by_requirement[
+                "Practical experience developing with Java and Spring Boot"
+            ]["status"],
+            "Full Match",
+        )
+        self.assertEqual(
+            by_requirement["Experience building REST APIs"]["status"],
+            "Full Match",
+        )
+        self.assertEqual(
+            by_requirement["Experience with microservices architecture"]["status"],
+            "Missing",
+        )
+        self.assertEqual(result["fully_matched"], 3)
+        self.assertEqual(result["missing"], 1)
+        self.assertEqual(result["score"], 60.0)
+
     def test_partial_technology_coverage_does_not_become_a_full_match(self):
         requirement = {
             "requirement": "Develop applications using Java and Spring Boot",
