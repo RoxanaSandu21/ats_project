@@ -34,7 +34,7 @@ QUALIFICATION_CUES = (
 
 RESPONSIBILITY_CUES = (
     "provide", "provides", "provided", "providing", "act as", "record",
-    "records", "recording", "troubleshoot", "troubleshooting", "manage",
+    "records", "recording", "log", "logging", "track", "tracking", "troubleshoot", "troubleshooting", "manage",
     "manages", "maintain", "maintains", "assist", "assists", "monitor",
     "monitors", "support", "supports", "ensure", "ensures", "resolve",
     "resolves", "handle", "handles", "coordinate", "coordinates",
@@ -252,7 +252,7 @@ def extract_job_criteria(job_description: str) -> Tuple[List[dict], List[dict]]:
                 "experience", "knowledge", "ability", "proficient",
                 "familiar", "understanding", "communication", "troubleshoot",
                 "responsible", "support", "degree", "certification", "english",
-                "provide", "record", "manage", "maintain", "assist", "monitor"
+                "provide", "record", "log", "logging", "track", "tracking", "incident", "manage", "maintain", "assist", "monitor"
             )
         )
         if not has_requirement_signal:
