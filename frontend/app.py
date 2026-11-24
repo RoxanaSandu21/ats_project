@@ -204,8 +204,9 @@ elif menu == "Evaluate Candidates":
                             f"{required_score}%" if required_score is not None else "N/A"
                         )
                         st.caption(
-                            "Weighted compatibility is based on evidence strength (100/50/25/0 points), "
-                            "whereas criteria with any context is only a count."
+                            "Weighted compatibility uses evidence points (100/50/25/0). Direct/partial "
+                            "evidence coverage counts only Full and Partial matches; Transferable Context "
+                            "is shown separately."
                         )
                     else:
                         st.error(f"Evaluation failed: {result.text}")
