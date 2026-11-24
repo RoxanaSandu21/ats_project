@@ -432,31 +432,170 @@ def _is_skills_list(text: str) -> bool:
     ))
 
 
+_ENGLISH_FUNCTION_WORDS = frozenset({
+    "the", "and", "of", "to", "for", "with", "from", "that", "this", "which",
+    "who", "where", "when", "while", "although", "because", "is", "are", "was",
+    "were", "be", "been", "have", "has", "had", "will", "can", "do", "does",
+    "did", "not", "into", "through", "during", "between", "within", "without",
+    "a", "i", "in", "my", "our", "their", "they", "we", "you", "it", "its",
+    "these", "those", "also", "as", "on", "at", "by", "or", "an", "all",
+})
+_ENGLISH_DISTINCTIVE_WORDS = frozenset({
+    "developed", "implemented", "designed", "created", "managed", "supported",
+    "customers", "users", "application", "project", "experience", "responsibilities",
+    "education", "university", "skills", "team", "worked", "built", "provided",
+})
+_CV_DATE_PATTERN = re.compile(
+    r"\b(?:jan(?:uary)?|feb(?:ruary)?|mar(?:ch)?|apr(?:il)?|may|jun(?:e)?|"
+    r"jul(?:y)?|aug(?:ust)?|sep(?:t(?:ember)?)?|oct(?:ober)?|nov(?:ember)?|dec(?:ember)?)"
+    r"\.?\s+\d{4}\b|\b(?:19|20)\d{2}\b|\b(?:present|current|now)\b",
+    re.IGNORECASE,
+)
+
+
+def _chunk_cv_context(text: str, max_chars: int = 420) -> List[str]:
+    """Create exact source lines and overlapping windows retaining CV context.
+
+    Windows keep a role/title close to the organization and dates that follow it.
+    This is important for customer-facing roles whose CVs list the title but do
+    not include a separate responsibilities paragraph.
+    """
+    lines = []
+    for raw_line in text.replace("\u200b", "").splitlines():
+        line = re.sub(r"[ \t]+", " ", raw_line).strip()
+        if not line:
+            continue
+        while len(line) > max_chars:
+            split_at = line.rfind(" ", 0, max_chars)
+            if split_at <= 0:
+                split_at = max_chars
+            piece = line[:split_at].strip()
+            if piece:
+                lines.append(piece)
+            line = line[split_at:].strip()
+        if line:
+            lines.append(line)
+
+    chunks = list(lines)
+    start = 0
+    while start < len(lines):
+        window = []
+        end = start
+        while end < len(lines):
+            candidate = "\n".join(window + [lines[end]])
+            if window and len(candidate) > max_chars:
+                break
+            window.append(lines[end])
+            end += 1
+        if len(window) > 1:
+            chunks.append("\n".join(window))
+        if end >= len(lines):
+            break
+        start = max(start + 1, end - 2)
+
+    unique = []
+    seen = set()
+    for chunk in chunks:
+        key = re.sub(r"\s+", " ", chunk.casefold()).strip()
+        if key and key not in seen:
+            seen.add(key)
+            unique.append(chunk)
+    return unique
+
+
+def _looks_like_english_resume(text: str) -> bool:
+    """Detect an English-language CV; this supports written English only."""
+    words = re.findall(r"\b[a-z]+\b", text.casefold())
+    if len(words) < 35:
+        return False
+    common = [word for word in words if word in _ENGLISH_FUNCTION_WORDS]
+    distinctive = {word for word in words if word in _ENGLISH_DISTINCTIVE_WORDS}
+    return (
+        len(common) >= 6
+        and len(common) / len(words) >= 0.04
+        and len(distinctive) >= 2
+    )
+
+
+def _find_english_writing_sample(text: str) -> str:
+    """Return one exact, readable CV excerpt demonstrating written English."""
+    candidates = []
+    for chunk in _chunk_cv_context(text):
+        words = re.findall(r"\b[a-z]+\b", chunk.casefold())
+        common = sum(word in _ENGLISH_FUNCTION_WORDS for word in words)
+        distinctive = {word for word in words if word in _ENGLISH_DISTINCTIVE_WORDS}
+        if len(words) >= 8 and common >= 2 and common / len(words) >= 0.04:
+            candidates.append((common, len(words), len(distinctive), len(chunk), chunk))
+    if candidates:
+        return max(candidates, key=lambda item: (item[0], item[1], item[2], item[3]))[4]
+    fallback = [
+        (len(re.findall(r"\b[a-z]+\b", chunk.casefold())), len(chunk), chunk)
+        for chunk in _chunk_cv_context(text)
+    ]
+    fallback = [item for item in fallback if item[0] >= 8]
+    return max(fallback, key=lambda item: (item[0], item[1]))[2] if fallback else ""
+
+
 def extract_cv_evidence(cv_text: str) -> List[dict]:
     """
-    Retain complete CV passages and distinguish action statements, skills lists,
-    generic context, and short headings. Headings are displayed but not used as
-    evidence of competence.
+    Build source-grounded evidence from sentences and overlapping CV context.
+    In contrast to isolated sentence-only extraction, windows preserve role,
+    employer, dates, project headings, and the text immediately following them.
     """
-    evidence = []
+    raw_items = []
     for sentence in split_into_sentences(cv_text):
-        entities = _unique_entities(sentence)
-        lowered = sentence.casefold()
         if _looks_like_cv_heading(sentence):
             evidence_type = "heading_or_title"
         elif _is_skills_list(sentence):
             evidence_type = "skills_list"
-        elif any(cue in lowered for cue in ACTION_CUES) or any(
-            entity["type"] in ("job responsibility", "work experience") for entity in entities
-        ):
+        elif any(cue in sentence.casefold() for cue in ACTION_CUES):
             evidence_type = "action_statement"
         else:
             evidence_type = "context"
+        raw_items.append((sentence, evidence_type))
 
+    for chunk in _chunk_cv_context(cv_text):
+        if len(chunk.strip()) < 18:
+            continue
+        lowered = chunk.casefold()
+        if _is_skills_list(chunk):
+            evidence_type = "skills_list"
+        elif any(cue in lowered for cue in ACTION_CUES):
+            evidence_type = "action_statement"
+        elif _CV_DATE_PATTERN.search(chunk) and len(chunk.splitlines()) > 1:
+            evidence_type = "experience_context"
+        elif _looks_like_cv_heading(chunk):
+            evidence_type = "heading_or_title"
+        else:
+            evidence_type = "context_window"
+        raw_items.append((chunk, evidence_type))
+
+    # A CV written in English is a source-grounded writing sample. It can support
+    # written use of English, but never spoken proficiency by itself.
+    if _looks_like_english_resume(cv_text):
+        writing_sample = _find_english_writing_sample(cv_text)
+        if writing_sample:
+            raw_items.append((writing_sample, "language_context"))
+
+    evidence = []
+    seen = set()
+    for text, evidence_type in raw_items:
+        normalized = re.sub(r"\s+", " ", text.casefold()).strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        entities = _unique_entities(text)
         evidence.append({
-            "text": sentence,
+            "text": text,
+            "quote": text,
+            "label": (
+                "English-language resume excerpt" if evidence_type == "language_context"
+                else "CV context excerpt"
+            ),
+            "type": evidence_type,
             "evidence_type": evidence_type,
-            "entities": [{"text": entity["text"], "type": entity["type"]} for entity in entities]
+            "entities": [{"text": entity["text"], "type": entity["type"]} for entity in entities],
+            "is_english_writing_sample": evidence_type == "language_context",
         })
     return evidence
 
