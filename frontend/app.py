@@ -182,6 +182,7 @@ elif menu == "Evaluate Candidates":
                     score = candidate.get("match_score", 0)
                     color = "🟢" if score >= 75 else "🟡" if score >= 50 else "🔴"
                     with st.expander(f"#{index} — {candidate.get('full_name', 'Unknown')} {color} ({score}%)"):
+                        st.caption(f"Last evaluated: {candidate.get('submitted_at', 'Unknown')}")
                         st.write(f"**Contact:** {candidate.get('email', 'Unspecified')} | {candidate.get('phone', 'Unspecified')}")
                         show_evaluation_details(candidate.get("bias_report", {}))
             else:
