@@ -41,7 +41,6 @@ def upload_cv(job_id: int, file: UploadFile = File(...), db: Session = Depends(g
     if not file.filename or Path(file.filename).suffix.lower() != ".pdf":
         raise HTTPException(status_code=400, detail="Please upload a PDF file.")
 
-    # Unique storage names prevent two candidates with the same filename overwriting each other.
     stored_name = f"{uuid.uuid4().hex}.pdf"
     file_path = os.path.join(UPLOAD_DIR, stored_name)
     try:
@@ -55,8 +54,6 @@ def upload_cv(job_id: int, file: UploadFile = File(...), db: Session = Depends(g
         raise HTTPException(status_code=422, detail="No readable text was extracted from this PDF.")
 
     info = extract_candidate_info(cv_text)
-
-    # Reuse a candidate record when a reliable email address is available.
     db_candidate = None
     if info["email"] != "Unspecified":
         db_candidate = db.query(models.Candidate).filter(
@@ -70,11 +67,8 @@ def upload_cv(job_id: int, file: UploadFile = File(...), db: Session = Depends(g
         db_candidate.parsed_text = cv_text
     else:
         db_candidate = models.Candidate(
-            full_name=info["full_name"],
-            email=info["email"],
-            phone=info["phone"],
-            file_path=file_path,
-            parsed_text=cv_text
+            full_name=info["full_name"], email=info["email"],
+            phone=info["phone"], file_path=file_path, parsed_text=cv_text
         )
         db.add(db_candidate)
 
@@ -92,13 +86,10 @@ def upload_cv(job_id: int, file: UploadFile = File(...), db: Session = Depends(g
         )
     }
 
-    db_evaluation = models.Evaluation(
-        job_id=job.id,
-        candidate_id=db_candidate.id,
-        match_score=result["score"],
-        bias_report=bias_report
-    )
-    db.add(db_evaluation)
+    db.add(models.Evaluation(
+        job_id=job.id, candidate_id=db_candidate.id,
+        match_score=result["score"], bias_report=bias_report
+    ))
     db.commit()
 
     return {
@@ -117,23 +108,30 @@ def upload_cv(job_id: int, file: UploadFile = File(...), db: Session = Depends(g
 
 @app.get("/jobs/{job_id}/leaderboard/")
 def get_leaderboard(job_id: int, db: Session = Depends(get_db)):
+    # Keep only the most recent evaluation per candidate for this job.
     evaluations = (
         db.query(models.Evaluation, models.Candidate)
         .join(models.Candidate, models.Evaluation.candidate_id == models.Candidate.id)
         .filter(models.Evaluation.job_id == job_id)
-        .order_by(models.Evaluation.match_score.desc())
+        .order_by(models.Evaluation.created_at.desc())
         .all()
     )
 
-    results = []
+    latest_by_candidate = {}
     for ev, cand in evaluations:
-        results.append({
-            "candidate_id": cand.id,
-            "full_name": cand.full_name,
-            "email": cand.email,
-            "phone": cand.phone,
-            "match_score": ev.match_score,
-            "bias_report": ev.bias_report,
-            "submitted_at": ev.created_at
-        })
-    return results
+        if cand.id not in latest_by_candidate:
+            latest_by_candidate[cand.id] = {
+                "candidate_id": cand.id,
+                "full_name": cand.full_name,
+                "email": cand.email,
+                "phone": cand.phone,
+                "match_score": ev.match_score,
+                "bias_report": ev.bias_report,
+                "submitted_at": ev.created_at
+            }
+
+    return sorted(
+        latest_by_candidate.values(),
+        key=lambda candidate: candidate["match_score"],
+        reverse=True
+    )
