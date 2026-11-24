@@ -262,7 +262,7 @@ def _requirement_group_key(requirement: dict) -> str:
     # even when the logged request happens to concern a video conference.
     if (
         re.search(r"\b(record|recording|log|logging|tracking|track)\b", text)
-        and re.search(r"\b(incident|service request|ticket|request)\b", text)
+        and re.search(r"\b(incidents?|service requests?|tickets?|requests?)\b", text)
     ):
         return "incident_and_troubleshooting"
 
