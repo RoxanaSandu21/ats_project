@@ -348,6 +348,128 @@ class OllamaParityEvidenceTests(unittest.TestCase):
         }
         self.assertEqual(_evidence_support_level(requirement, direct_evidence), "direct")
 
+        # A service-desk troubleshooting passage without incident logging must
+        # not receive a full match for the combined criterion.
+        troubleshooting_only = {
+            "label": "Service Desk Analyst | Responsibility",
+            "quote": (
+                "Service Desk Analyst, SCC. Executed automated system diagnostics "
+                "and OS performance troubleshooting using PowerShell scripts."
+            ),
+            "text": (
+                "Service Desk Analyst, SCC. Executed automated system diagnostics "
+                "and OS performance troubleshooting using PowerShell scripts."
+            ),
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(
+            _evidence_support_level(requirement, troubleshooting_only),
+            "contextual",
+        )
+
+    def test_maria_style_service_desk_evidence_is_retained_with_role_context(self):
+        source = (
+            "Experience\n"
+            "Service Desk Analyst, SCC – Iași, Romania June 2026 – Present\n"
+            "- Executed automated system diagnostics and OS performance troubleshooting "
+            "using PowerShell scripts, minimizing ticket resolution times across enterprise endpoints"
+        )
+        with patch("services.nlp_service._unique_entities", return_value=[]):
+            evidence = extract_cv_evidence(source)
+
+        combined = [
+            item for item in evidence
+            if "Service Desk Analyst" in item.get("quote", "")
+            and "troubleshooting" in item.get("quote", "").casefold()
+        ]
+        self.assertTrue(
+            combined,
+            "The service-desk role heading must stay attached to its troubleshooting responsibility.",
+        )
+        item = combined[0]
+        self.assertEqual(item["evidence_type"], "action_statement")
+        self.assertEqual(
+            _evidence_support_level("Troubleshooting and incident management", item),
+            "contextual",
+        )
+        self.assertEqual(
+            _evidence_support_level("End-user and first-line support", item),
+            "contextual",
+        )
+
+        for requirement in (
+            "Troubleshooting and incident management",
+            "End-user and first-line support",
+        ):
+            status, _, points = _assess_evidence(
+                {"requirement": requirement, "criterion_type": "responsibility"},
+                item,
+                0.80,
+            )
+            self.assertEqual(status, "Partial Match")
+            self.assertEqual(points, 50.0)
+
+    def test_video_conference_source_text_cannot_mask_troubleshooting_evidence(self):
+        import torch
+
+        raw_requirements = [
+            make_requirement(
+                "You will troubleshoot hardware and software problems, manage service requests, and maintain comprehensive documentation."
+            ),
+            make_requirement(
+                "Record all incidents and Video conference requests within the SCC service desk tool;"
+            ),
+            make_requirement("Troubleshooting experience in a support environment;"),
+            make_requirement("Provide video and audio 1st line support services"),
+        ]
+        grouped = _group_job_requirements(raw_requirements)
+        evidence = [{
+            "text": (
+                "Service Desk Analyst, SCC. Executed automated system diagnostics "
+                "and OS performance troubleshooting using PowerShell scripts."
+            ),
+            "quote": (
+                "Service Desk Analyst, SCC. Executed automated system diagnostics "
+                "and OS performance troubleshooting using PowerShell scripts."
+            ),
+            "label": "CV context excerpt",
+            "type": "action_statement",
+            "evidence_type": "action_statement",
+            "entities": [],
+        }]
+
+        class FixedEmbeddingModel:
+            def encode(self, texts, **kwargs):
+                return torch.ones((len(texts), 8), dtype=torch.float32)
+
+        with patch(
+            "services.nlp_service.extract_job_criteria",
+            return_value=(grouped, []),
+        ):
+            with patch(
+                "services.nlp_service.extract_cv_evidence",
+                return_value=evidence,
+            ):
+                with patch(
+                    "services.nlp_service.embedding_model",
+                    FixedEmbeddingModel(),
+                ):
+                    result = calculate_hybrid_match_score(
+                        "IT Support with English",
+                        "Service Desk Analyst with troubleshooting experience.",
+                    )
+
+        troubleshooting = next(
+            item for item in result["match_results"]
+            if item["requirement"] == "Troubleshooting and incident management"
+        )
+        self.assertEqual(troubleshooting["status"], "Partial Match")
+        self.assertEqual(troubleshooting["score"], 50.0)
+        self.assertEqual(
+            troubleshooting["evidence_strength"],
+            "contextual_transferable_evidence",
+        )
+
     def test_english_marker_survives_deduplication_with_context_windows(self):
         writing_sample = (
             "Developed a mobile application that helps users monitor and improve "
