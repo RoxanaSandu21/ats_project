@@ -829,7 +829,7 @@ TECHNICAL_ENTITY_TYPES = {
 
 def _normalize_technical_entity(value: str) -> str:
     """Normalize technology names without conflating distinct names such as Java/JavaScript."""
-    value = re.sub(r"\\s+v?\\d+(?:\\.\\d+)*$", "", value.casefold().strip())
+    value = re.sub(r"\s+v?\d+(?:\.\d+)*$", "", value.casefold().strip())
     return re.sub(r"[^a-z0-9+#]", "", value)
 
 
