@@ -567,7 +567,10 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
             transferable += 1
         else:
             missing += 1
-        if status != "Missing":
+        # Direct/partial evidence coverage excludes Transferable Context.
+        # Transferable passages are counted separately and still contribute
+        # only their reduced 25-point value to the compatibility score.
+        if status in ("Full Match", "Partial Match"):
             evidence_covered += 1
 
         alternatives = []
@@ -605,6 +608,8 @@ def calculate_hybrid_match_score(job_description: str, cv_text: str) -> dict:
 
     score = round(weighted_total / total_weight, 2) if total_weight else 0.0
     required_score = round(required_total / required_weight, 2) if required_weight else None
+    # Coverage means criteria with direct or partial evidence, not merely
+    # a semantically related/transferable passage.
     coverage = round(evidence_covered / len(requirements) * 100, 2)
     explanation = (
         f"Evaluated {len(requirements)} assessable job criteria: {fully_matched} fully supported, "
