@@ -568,6 +568,46 @@ class OllamaParityEvidenceTests(unittest.TestCase):
             "direct",
         )
 
+    def test_unrelated_management_action_does_not_validate_distant_mailbox_mention(self):
+        evidence = {
+            "label": "Experience context",
+            "quote": (
+                "Managed software delivery schedules and coordinated engineering "
+                "planning across several teams for multiple quarterly releases. "
+                "The role also used a shared mailbox for announcements."
+            ),
+            "text": (
+                "Managed software delivery schedules and coordinated engineering "
+                "planning across several teams for multiple quarterly releases. "
+                "The role also used a shared mailbox for announcements."
+            ),
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(
+            _evidence_support_level("Mailbox and service-level monitoring", evidence),
+            "none",
+        )
+
+    def test_unrelated_management_action_does_not_validate_distant_av_mention(self):
+        evidence = {
+            "label": "Project experience",
+            "quote": (
+                "Managed engineering schedules and coordinated several releases "
+                "across distributed product teams during the year. "
+                "The office had a video conference room."
+            ),
+            "text": (
+                "Managed engineering schedules and coordinated several releases "
+                "across distributed product teams during the year. "
+                "The office had a video conference room."
+            ),
+            "evidence_type": "action_statement",
+        }
+        self.assertEqual(
+            _evidence_support_level("Video, audio and audiovisual support", evidence),
+            "none",
+        )
+
     def test_video_conference_mention_without_av_activity_is_not_direct(self):
         evidence = {
             "label": "Project context",
