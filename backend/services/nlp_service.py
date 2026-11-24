@@ -744,12 +744,17 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
             r"troubleshot|installed|maintained|prepared|provided|coordinated|managed)\b"
         )
         av_object = (
-            r"\b(audio[- ]visual|a/v|av equipment|video conferencing|video conference|"
-            r"projector|microphone|display setup|sound system|conference room "
-            r"(?:av )?(?:equipment|system|setup|hardware))\b"
+            r"\b(audio[- ]visual|a/v|av equipment|video[- ]conferenc(?:e|ing)s?|"
+            r"projectors?|microphones?|speakers?|display setup|sound system|"
+            r"conference room (?:av )?(?:equipment|system|setup|hardware))\b"
         )
         av_task = bool(
-            re.search(rf"{av_action}[\s\S]{{0,80}}{av_object}|{av_object}[\s\S]{{0,80}}{av_action}", text, re.IGNORECASE)
+            re.search(
+                rf"(?:{av_action})[\s\S]{{0,80}}(?:{av_object})|"
+                rf"(?:{av_object})[\s\S]{{0,80}}(?:{av_action})",
+                text,
+                re.IGNORECASE,
+            )
         )
         if av_mention and av_task:
             return "direct"
@@ -776,8 +781,8 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
         )
         network_task = bool(
             re.search(
-                rf"{network_action}[\s\S]{{0,80}}{network_object}|"
-                rf"{network_object}[\s\S]{{0,80}}{network_action}",
+                rf"(?:{network_action})[\s\S]{{0,80}}(?:{network_object})|"
+                rf"(?:{network_object})[\s\S]{{0,80}}(?:{network_action})",
                 text,
                 re.IGNORECASE,
             )
@@ -804,10 +809,12 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
             r"\b(shared )?mailboxes?\b|\b(?:ola|sla)s?\b|"
             r"\bservice level agreements?\b|\bservice levels?\b"
         )
+        # Group each alternative explicitly. Without these non-capturing
+        # groups, the regex alternation can match an object mention alone.
         service_level_activity = bool(
             re.search(
-                rf"{service_level_action}[\s\S]{{0,60}}{service_level_object}|"
-                rf"{service_level_object}[\s\S]{{0,60}}{service_level_action}",
+                rf"(?:{service_level_action})[\s\S]{{0,60}}(?:{service_level_object})|"
+                rf"(?:{service_level_object})[\s\S]{{0,60}}(?:{service_level_action})",
                 text,
                 re.IGNORECASE,
             )
