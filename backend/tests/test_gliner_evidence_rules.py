@@ -89,6 +89,19 @@ class OllamaParityEvidenceTests(unittest.TestCase):
         self.assertEqual(sum(len(item["source_statements"]) for item in grouped), 14)
         self.assertTrue(all(item["source_details"] for item in grouped))
 
+        source_by_group = {
+            item["group_key"]: item["source_statements"]
+            for item in grouped
+        }
+        self.assertTrue(any(
+            "Record all incidents" in statement
+            for statement in source_by_group["incident_and_troubleshooting"]
+        ))
+        self.assertFalse(any(
+            "Record all incidents" in statement
+            for statement in source_by_group["audiovisual_support"]
+        ))
+
         priority_by_group = {item["group_key"]: item["priority"] for item in grouped}
         self.assertEqual(priority_by_group["end_user_support"], "required")
         self.assertEqual(priority_by_group["incident_and_troubleshooting"], "required")
@@ -180,6 +193,25 @@ class OllamaParityEvidenceTests(unittest.TestCase):
         self.assertEqual(status, "Partial Match")
         self.assertEqual(reason, "explicit_english_level_but_modes_not_both_proven")
         self.assertEqual(points, 60.0)
+
+    def test_explicit_spoken_and_written_english_can_be_full_evidence(self):
+        evidence = {
+            "label": "Languages",
+            "quote": "English — Advanced; spoken and written",
+            "text": "English — Advanced; spoken and written",
+            "evidence_type": "skills_list",
+        }
+        requirement = "Excellent understanding of English spoken and written"
+        self.assertEqual(_evidence_support_level(requirement, evidence), "direct")
+
+        status, reason, points = _assess_evidence(
+            {"requirement": requirement, "criterion_type": "qualification"},
+            evidence,
+            0.85,
+        )
+        self.assertEqual(status, "Full Match")
+        self.assertEqual(reason, "explicit_spoken_and_written_english_evidence")
+        self.assertEqual(points, 80.0)
 
     def test_software_debugging_is_contextual_not_direct_service_desk_evidence(self):
         evidence = {
