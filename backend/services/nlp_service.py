@@ -921,6 +921,70 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
     return "none"
 
 
+
+TECHNICAL_ENTITY_TYPES = {
+    "technical skill", "software", "tool", "methodology", "language",
+}
+
+# These are generic category words, not named technologies. Excluding them
+# prevents a sentence about "software development" from proving a specific
+# support or engineering capability merely because it contains "software".
+GENERIC_TECHNICAL_ENTITY_NAMES = {
+    "software", "hardware", "technology", "technologies",
+    "application", "applications", "system", "systems",
+    "tool", "tools", "platform", "platforms",
+    "software development", "hardware problems",
+}
+
+
+def _normalize_technical_entity(value: str) -> str:
+    """Normalize technology names without conflating distinct names such as Java/JavaScript."""
+    value = re.sub(r"\s+v?\d+(?:\.\d+)*$", "", value.casefold().strip())
+    return re.sub(r"[^a-z0-9+#]", "", value)
+
+
+def _explicit_technical_entity_matches(requirement: dict, evidence: dict) -> Tuple[List[str], List[str]]:
+    """
+    Compare named technical entities from GLiNER against the original CV text.
+
+    The vocabulary remains model-extracted rather than a hardcoded technology
+    list. Generic category words such as "software" are not treated as named
+    technologies; exact matching is reserved for standalone requirements.
+    """
+    required = []
+    seen = set()
+    generic = {_normalize_technical_entity(item) for item in GENERIC_TECHNICAL_ENTITY_NAMES}
+    for entity in requirement.get("entities", []):
+        entity_type = (entity.get("type") or "").casefold()
+        name = (entity.get("text") or "").strip()
+        normalized = _normalize_technical_entity(name)
+        if (
+            entity_type in TECHNICAL_ENTITY_TYPES
+            and normalized
+            and normalized not in generic
+            and normalized not in seen
+        ):
+            required.append((name, normalized))
+            seen.add(normalized)
+
+    if not required:
+        return [], []
+
+    quote = evidence.get("quote") or evidence.get("text") or ""
+    source_tokens = re.findall(r"[a-z0-9]+(?:[+#]+)?", quote.casefold())
+    source_terms = set()
+    for start in range(len(source_tokens)):
+        for width in range(1, min(4, len(source_tokens) - start) + 1):
+            source_terms.add("".join(source_tokens[start:start + width]))
+
+    matched = [
+        original
+        for original, normalized in required
+        if normalized in source_terms
+    ]
+    return matched, [original for original, _ in required]
+
+
 def _assess_evidence(
     requirement: dict,
     evidence: dict,
@@ -972,6 +1036,31 @@ def _assess_evidence(
 
     if requirement.get("criterion_type") == "responsibility" and evidence_type == "skills_list":
         return "Missing", "skills_list_does_not_demonstrate_responsibility", 0.0
+
+    # Exact named-technology matching is for individual requirements only.
+    # Grouped capabilities (notably ID 11's troubleshooting/incident criterion)
+    # combine different duties and tool references; treating every extracted
+    # entity in that group as a required technology creates false evidence.
+    group_key = requirement.get("group_key")
+    is_standalone_requirement = not group_key or group_key.startswith("standalone:")
+    if is_standalone_requirement:
+        matched_technical, required_technical = _explicit_technical_entity_matches(
+            requirement, evidence
+        )
+    else:
+        matched_technical, required_technical = [], []
+
+    if required_technical:
+        if not matched_technical:
+            return "Missing", "no_exact_named_technical_entity_evidence", 0.0
+        coverage = len(matched_technical) / len(required_technical)
+        if evidence_type == "skills_list":
+            return "Partial Match", "named_skill_list_without_proficiency_depth", 50.0
+        if evidence_type in ("experience_context", "context_window"):
+            return "Partial Match", "named_technical_skill_in_experience_context", 50.0
+        if evidence_type == "action_statement" and coverage >= 1.0:
+            return "Full Match", "explicit_named_technical_skills_in_action_evidence", 80.0
+        return "Partial Match", "partial_named_technical_skill_overlap", 50.0
 
     # Generic entity alignment is used only for criteria without a specialized
     # evidence rule. Similarity retrieves passages; it does not establish a match.
