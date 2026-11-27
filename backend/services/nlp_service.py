@@ -22,8 +22,30 @@ EMPLOYER_BENEFIT_CUES = (
     "retail voucher", "voucher", "reimburse", "reimbursement",
     "tuition fee", "dedicated training department", "benefits package",
     "employee benefits", "health insurance", "meal ticket", "meal voucher",
-    "salary", "annual leave", "paid leave", "pension contribution",
-    "staff discount", "employee discount"
+    "salary", "compensation", "pay range", "annual leave", "paid leave",
+    "pension contribution", "staff discount", "employee discount"
+)
+
+# These describe the posting rather than a candidate capability to be scored.
+JOB_SECTION_HEADING_PATTERN = re.compile(
+    r"^(?:qualifications?|experience|responsibilities|requirements|"
+    r"ideal candidate profiles?(?:,\s*talents?)?(?:,\s*and\s*desired qualifications?)?|"
+    r"core functions|what you(?:'|’)ll do|what you bring)\s*[:\-–—]?$",
+    re.IGNORECASE,
+)
+JOB_INTRO_PATTERN = re.compile(
+    r"^we are looking for\b.*\bto join\b",
+    re.IGNORECASE,
+)
+JOB_POST_CONTEXT_PATTERNS = (
+    re.compile(
+        r"^here are the core functions, responsibilities, and expectations for this role\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^this is a full[- ]time\b.*\bremote position\b",
+        re.IGNORECASE,
+    ),
 )
 
 QUALIFICATION_CUES = (
@@ -34,11 +56,15 @@ QUALIFICATION_CUES = (
 
 RESPONSIBILITY_CUES = (
     "provide", "provides", "provided", "providing", "act as", "record",
-    "records", "recording", "log", "logging", "track", "tracking", "troubleshoot", "troubleshooting", "manage",
-    "manages", "maintain", "maintains", "assist", "assists", "monitor",
-    "monitors", "support", "supports", "ensure", "ensures", "resolve",
-    "resolves", "handle", "handles", "coordinate", "coordinates",
-    "deliver", "delivers", "administer", "administers"
+    "records", "recording", "log", "logging", "track", "tracking",
+    "troubleshoot", "troubleshooting", "manage", "manages", "maintain",
+    "maintains", "assist", "assists", "monitor", "monitors", "support",
+    "supports", "ensure", "ensures", "resolve", "resolves", "handle",
+    "handles", "coordinate", "coordinates", "deliver", "delivers",
+    "administer", "administers", "build", "builds", "enhance", "enhances",
+    "design", "designs", "develop", "develops", "implement", "implements",
+    "contribute", "contributes", "participate", "participates", "collaborate",
+    "collaborates", "write", "writes", "integrate", "integrates"
 )
 
 ACTION_CUES = (
@@ -56,7 +82,7 @@ NICE_TO_HAVE_PATTERN = re.compile(
     re.IGNORECASE
 )
 PREFERRED_PATTERN = re.compile(
-    r"\b(?:preferred|desirable|advantage|ideally)\b",
+    r"\b(?:preferred|desirable|advantage|ideally|recommended)\b",
     re.IGNORECASE
 )
 REQUIRED_PATTERN = re.compile(
@@ -193,19 +219,50 @@ def _is_employer_benefit(text: str) -> bool:
     return any(cue in lowered for cue in EMPLOYER_BENEFIT_CUES)
 
 
+def _job_exclusion_reason(text: str):
+    """Return why a job-ad sentence is not a candidate-scoring criterion."""
+    normalized = re.sub(r"\s+", " ", text).strip()
+    lowered = normalized.casefold()
+
+    if JOB_SECTION_HEADING_PATTERN.fullmatch(normalized):
+        return "Section heading; it does not define an assessable candidate criterion."
+    if re.search(r"\b(compensation|salary|pay range)\b", lowered):
+        return "Compensation information; it must not affect candidate compatibility."
+    if JOB_INTRO_PATTERN.search(lowered) and not re.search(
+        r"\b(experience|knowledge|ability|required|must|proficient|proficiency)\b",
+        lowered,
+    ):
+        return "Role-introduction text; it does not state a candidate requirement."
+    if any(pattern.search(lowered) for pattern in JOB_POST_CONTEXT_PATTERNS):
+        return "Job-posting context or metadata; it is not a candidate capability."
+    return None
+
+
 def _category(text: str, entities: List[dict]) -> str:
     lowered = text.casefold()
     labels = [entity["type"] for entity in entities]
 
-    if "language" in labels or re.search(r"\benglish\b|\bspoken and written\b", lowered):
+    # GLiNER's "language" entity label also covers programming languages such
+    # as Java. Require natural-language context before creating that criterion.
+    spoken_language_context = bool(re.search(
+        r"\b(spoken|speaking|written|writing|verbal|fluent|fluency|native|"
+        r"language proficiency|language skills|proficiency|proficient)\b",
+        lowered,
+    ))
+    has_language_entity = "language" in labels
+    has_cefr_level = bool(re.search(r"\b(?:a[12]|b[12]|c[12])\b", lowered))
+    if re.search(r"\benglish\b", lowered) or (
+        has_language_entity and (spoken_language_context or has_cefr_level)
+    ):
         return "language"
+
     if "soft skill" in labels or any(
         cue in lowered for cue in ("work under pressure", "communication skills", "interpersonal skills")
     ):
         return "soft skill"
     if "certification" in labels or "qualification" in labels:
         return "qualification"
-    if any(label in labels for label in ("technical skill", "software", "tool", "methodology")):
+    if any(label in labels for label in ("technical skill", "software", "tool", "methodology", "language")):
         return "technical skill"
     if any(cue in lowered for cue in QUALIFICATION_CUES):
         return "qualification"
@@ -382,21 +439,22 @@ def extract_job_criteria(job_description: str) -> Tuple[List[dict], List[dict]]:
     """
     requirements, excluded, seen = [], [], set()
     for sentence in split_into_sentences(job_description):
-        entities = _unique_entities(sentence)
         normalized = re.sub(r"\s+", " ", sentence).strip()
         key = normalized.casefold().strip(" .;:-")
         if not key or key in seen:
             continue
         seen.add(key)
 
-        if _is_employer_benefit(normalized):
+        exclusion_reason = _job_exclusion_reason(normalized)
+        if exclusion_reason:
             excluded.append({
                 "statement": normalized,
-                "category": "employer benefit",
-                "reason": "Employer-provided benefit or compensation; not a candidate qualification or responsibility."
+                "category": "job posting context",
+                "reason": exclusion_reason,
             })
             continue
 
+        entities = _unique_entities(sentence)
         lowered = normalized.casefold()
         has_requirement_signal = bool(entities) or any(
             cue in lowered for cue in (
@@ -938,9 +996,19 @@ GENERIC_TECHNICAL_ENTITY_NAMES = {
 
 
 def _normalize_technical_entity(value: str) -> str:
-    """Normalize technology names without conflating distinct names such as Java/JavaScript."""
+    """Normalize punctuation, versions, common plurals, and REST/RESTful variants."""
     value = re.sub(r"\s+v?\d+(?:\.\d+)*$", "", value.casefold().strip())
-    return re.sub(r"[^a-z0-9+#]", "", value)
+    tokens = re.findall(r"[a-z0-9]+(?:[+#]+)?", value)
+    normalized = []
+    for token in tokens:
+        if token == "restful":
+            token = "rest"
+        elif token == "apis":
+            token = "api"
+        elif token.endswith("ies") and len(token) > 4:
+            token = token[:-3] + "y"
+        normalized.append(token)
+    return "".join(normalized)
 
 
 def _explicit_technical_entity_matches(requirement: dict, evidence: dict) -> Tuple[List[str], List[str]]:
@@ -975,7 +1043,7 @@ def _explicit_technical_entity_matches(requirement: dict, evidence: dict) -> Tup
     source_terms = set()
     for start in range(len(source_tokens)):
         for width in range(1, min(4, len(source_tokens) - start) + 1):
-            source_terms.add("".join(source_tokens[start:start + width]))
+            source_terms.add(_normalize_technical_entity(" ".join(source_tokens[start:start + width])))
 
     matched = [
         original
