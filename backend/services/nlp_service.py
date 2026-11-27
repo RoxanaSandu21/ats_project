@@ -22,8 +22,30 @@ EMPLOYER_BENEFIT_CUES = (
     "retail voucher", "voucher", "reimburse", "reimbursement",
     "tuition fee", "dedicated training department", "benefits package",
     "employee benefits", "health insurance", "meal ticket", "meal voucher",
-    "salary", "annual leave", "paid leave", "pension contribution",
-    "staff discount", "employee discount"
+    "salary", "compensation", "pay range", "annual leave", "paid leave",
+    "pension contribution", "staff discount", "employee discount"
+)
+
+# These describe the posting rather than a candidate capability to be scored.
+JOB_SECTION_HEADING_PATTERN = re.compile(
+    r"^(?:qualifications?|experience|responsibilities|requirements|"
+    r"ideal candidate profiles?(?:,\s*talents?)?(?:,\s*and\s*desired qualifications?)?|"
+    r"core functions|what you(?:'|’)ll do|what you bring)\s*[:\-–—]?$",
+    re.IGNORECASE,
+)
+JOB_INTRO_PATTERN = re.compile(
+    r"^we are looking for\b.*\bto join\b",
+    re.IGNORECASE,
+)
+JOB_POST_CONTEXT_PATTERNS = (
+    re.compile(
+        r"^here are the core functions, responsibilities, and expectations for this role\b",
+        re.IGNORECASE,
+    ),
+    re.compile(
+        r"^this is a full[- ]time\b.*\bremote position\b",
+        re.IGNORECASE,
+    ),
 )
 
 QUALIFICATION_CUES = (
@@ -34,11 +56,15 @@ QUALIFICATION_CUES = (
 
 RESPONSIBILITY_CUES = (
     "provide", "provides", "provided", "providing", "act as", "record",
-    "records", "recording", "log", "logging", "track", "tracking", "troubleshoot", "troubleshooting", "manage",
-    "manages", "maintain", "maintains", "assist", "assists", "monitor",
-    "monitors", "support", "supports", "ensure", "ensures", "resolve",
-    "resolves", "handle", "handles", "coordinate", "coordinates",
-    "deliver", "delivers", "administer", "administers"
+    "records", "recording", "log", "logging", "track", "tracking",
+    "troubleshoot", "troubleshooting", "manage", "manages", "maintain",
+    "maintains", "assist", "assists", "monitor", "monitors", "support",
+    "supports", "ensure", "ensures", "resolve", "resolves", "handle",
+    "handles", "coordinate", "coordinates", "deliver", "delivers",
+    "administer", "administers", "build", "builds", "enhance", "enhances",
+    "design", "designs", "develop", "develops", "implement", "implements",
+    "contribute", "contributes", "participate", "participates", "collaborate",
+    "collaborates", "write", "writes", "integrate", "integrates"
 )
 
 ACTION_CUES = (
@@ -56,7 +82,7 @@ NICE_TO_HAVE_PATTERN = re.compile(
     re.IGNORECASE
 )
 PREFERRED_PATTERN = re.compile(
-    r"\b(?:preferred|desirable|advantage|ideally)\b",
+    r"\b(?:preferred|desirable|advantage|ideally|recommended)\b",
     re.IGNORECASE
 )
 REQUIRED_PATTERN = re.compile(
@@ -193,19 +219,52 @@ def _is_employer_benefit(text: str) -> bool:
     return any(cue in lowered for cue in EMPLOYER_BENEFIT_CUES)
 
 
+def _job_exclusion_reason(text: str):
+    """Return why a job-ad sentence is not a candidate-scoring criterion."""
+    normalized = re.sub(r"\s+", " ", text).strip()
+    lowered = normalized.casefold()
+
+    if JOB_SECTION_HEADING_PATTERN.fullmatch(normalized):
+        return "Section heading; it does not define an assessable candidate criterion."
+    if _is_employer_benefit(normalized):
+        if re.search(r"\b(compensation|salary|pay range)\b", lowered):
+            return "Compensation information; it must not affect candidate compatibility."
+        return "Employer-provided benefit; it is not a candidate qualification or responsibility."
+    if JOB_INTRO_PATTERN.search(lowered) and not re.search(
+        r"\b(experience|knowledge|ability|required|must|proficient|proficiency)\b",
+        lowered,
+    ):
+        return "Role-introduction text; it does not state a candidate requirement."
+    if any(pattern.search(lowered) for pattern in JOB_POST_CONTEXT_PATTERNS):
+        return "Job-posting context or metadata; it is not a candidate capability."
+    return None
+
+
 def _category(text: str, entities: List[dict]) -> str:
     lowered = text.casefold()
     labels = [entity["type"] for entity in entities]
 
-    if "language" in labels or re.search(r"\benglish\b|\bspoken and written\b", lowered):
+    # GLiNER's "language" entity label also covers programming languages such
+    # as Java. Require natural-language context before creating that criterion.
+    spoken_language_context = bool(re.search(
+        r"\b(spoken|speaking|written|writing|verbal|fluent|fluency|native|"
+        r"language proficiency|language skills|proficiency|proficient)\b",
+        lowered,
+    ))
+    has_language_entity = "language" in labels
+    has_cefr_level = bool(re.search(r"\b(?:a[12]|b[12]|c[12])\b", lowered))
+    if re.search(r"\benglish\b", lowered) or (
+        has_language_entity and (spoken_language_context or has_cefr_level)
+    ):
         return "language"
+
     if "soft skill" in labels or any(
         cue in lowered for cue in ("work under pressure", "communication skills", "interpersonal skills")
     ):
         return "soft skill"
     if "certification" in labels or "qualification" in labels:
         return "qualification"
-    if any(label in labels for label in ("technical skill", "software", "tool", "methodology")):
+    if any(label in labels for label in ("technical skill", "software", "tool", "methodology", "language")):
         return "technical skill"
     if any(cue in lowered for cue in QUALIFICATION_CUES):
         return "qualification"
@@ -238,7 +297,12 @@ def _priority(text: str, criterion_type: str) -> Tuple[str, str]:
     # because a skill keyword appears in the advert, but because the posting
     # directly instructs the holder of the role to perform the task.
     if re.match(
-        r"^\s*(?:you will|act as|provide|record|attempt to resolve)\b",
+        r"^\s*(?:you will|act as|provide|record|attempt to resolve|build|enhance|design|develop|"
+        r"implement|contribute|participate|collaborate|write|integrate|maintain|troubleshoot)\b",
+        text,
+        re.IGNORECASE,
+    ) or re.search(
+        r"\bwill\s+(?:contribute|build|enhance|design|develop|implement|participate|collaborate|write|integrate)\b",
         text,
         re.IGNORECASE,
     ):
@@ -382,21 +446,22 @@ def extract_job_criteria(job_description: str) -> Tuple[List[dict], List[dict]]:
     """
     requirements, excluded, seen = [], [], set()
     for sentence in split_into_sentences(job_description):
-        entities = _unique_entities(sentence)
         normalized = re.sub(r"\s+", " ", sentence).strip()
         key = normalized.casefold().strip(" .;:-")
         if not key or key in seen:
             continue
         seen.add(key)
 
-        if _is_employer_benefit(normalized):
+        exclusion_reason = _job_exclusion_reason(normalized)
+        if exclusion_reason:
             excluded.append({
                 "statement": normalized,
-                "category": "employer benefit",
-                "reason": "Employer-provided benefit or compensation; not a candidate qualification or responsibility."
+                "category": "job posting context",
+                "reason": exclusion_reason,
             })
             continue
 
+        entities = _unique_entities(sentence)
         lowered = normalized.casefold()
         has_requirement_signal = bool(entities) or any(
             cue in lowered for cue in (
@@ -703,6 +768,45 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
     def has(patterns) -> bool:
         return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
 
+    # A degree is a factual qualification, not an action statement. It can be
+    # established by an education entry even when CV extraction classifies the
+    # excerpt as ordinary context rather than an action_statement.
+    bachelor_requirement = bool(re.search(
+        r"\b(?:bachelor'?s|baccalaureate)\s+degree\b",
+        requirement,
+    ))
+    if bachelor_requirement:
+        degree_present = bool(re.search(
+            r"\b(?:bachelor(?:'s)?|baccalaureate)\b",
+            quote,
+        ))
+        if not degree_present:
+            return "none"
+
+        field_clause = re.search(
+            r"\bdegree\b\s+in\s+(.+?)(?:\s*,?\s+or equivalent\b|$)",
+            requirement,
+        )
+        target_fields = []
+        if field_clause:
+            for field in re.split(r",|\bor\b", field_clause.group(1)):
+                normalized_field = re.sub(r"^(?:a|an)\s+", "", field.strip())
+                if normalized_field and not re.search(
+                    r"\b(?:related|relevant)\s+field\b",
+                    normalized_field,
+                ):
+                    target_fields.append(normalized_field)
+
+        if not target_fields or any(
+            re.search(rf"\b{re.escape(field)}\b", quote)
+            for field in target_fields
+        ):
+            return "direct"
+
+        # A bachelor's degree is present, but the CV excerpt does not establish
+        # that its discipline matches the fields requested by the posting.
+        return "contextual"
+
     if re.search(r"\benglish\b|language proficiency", requirement):
         explicitly_named = bool(re.search(r"\benglish\b", quote))
         explicit_level = has((
@@ -732,7 +836,7 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
         or "video and audio" in requirement
     ):
         av_mention = has((
-            r"\b(audio[- ]visual|a/v|av equipment|video conferencing|video conference)\b",
+            r"\b(audio[- ]visual|a/v|av equipment|video[- ]conferenc(?:e|ing)s?)\b",
             r"\b(projector|microphone|display setup|sound system|conference room "
             r"(?:av )?(?:equipment|system|setup|hardware))\b",
         ))
@@ -921,6 +1025,80 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
     return "none"
 
 
+
+TECHNICAL_ENTITY_TYPES = {
+    "technical skill", "software", "tool", "methodology", "language",
+}
+
+# These are generic category words, not named technologies. Excluding them
+# prevents a sentence about "software development" from proving a specific
+# support or engineering capability merely because it contains "software".
+GENERIC_TECHNICAL_ENTITY_NAMES = {
+    "software", "hardware", "technology", "technologies",
+    "application", "applications", "system", "systems",
+    "tool", "tools", "platform", "platforms",
+    "software development", "hardware problems",
+}
+
+
+def _normalize_technical_entity(value: str) -> str:
+    """Normalize punctuation, versions, common plurals, and REST/RESTful variants."""
+    value = re.sub(r"\s+v?\d+(?:\.\d+)*$", "", value.casefold().strip())
+    tokens = re.findall(r"[a-z0-9]+(?:[+#]+)?", value)
+    normalized = []
+    for token in tokens:
+        if token == "restful":
+            token = "rest"
+        elif token == "apis":
+            token = "api"
+        elif token.endswith("ies") and len(token) > 4:
+            token = token[:-3] + "y"
+        normalized.append(token)
+    return "".join(normalized)
+
+
+def _explicit_technical_entity_matches(requirement: dict, evidence: dict) -> Tuple[List[str], List[str]]:
+    """
+    Compare named technical entities from GLiNER against the original CV text.
+
+    The vocabulary remains model-extracted rather than a hardcoded technology
+    list. Generic category words such as "software" are not treated as named
+    technologies; exact matching is reserved for standalone requirements.
+    """
+    required = []
+    seen = set()
+    generic = {_normalize_technical_entity(item) for item in GENERIC_TECHNICAL_ENTITY_NAMES}
+    for entity in requirement.get("entities", []):
+        entity_type = (entity.get("type") or "").casefold()
+        name = (entity.get("text") or "").strip()
+        normalized = _normalize_technical_entity(name)
+        if (
+            entity_type in TECHNICAL_ENTITY_TYPES
+            and normalized
+            and normalized not in generic
+            and normalized not in seen
+        ):
+            required.append((name, normalized))
+            seen.add(normalized)
+
+    if not required:
+        return [], []
+
+    quote = evidence.get("quote") or evidence.get("text") or ""
+    source_tokens = re.findall(r"[a-z0-9]+(?:[+#]+)?", quote.casefold())
+    source_terms = set()
+    for start in range(len(source_tokens)):
+        for width in range(1, min(4, len(source_tokens) - start) + 1):
+            source_terms.add(_normalize_technical_entity(" ".join(source_tokens[start:start + width])))
+
+    matched = [
+        original
+        for original, normalized in required
+        if normalized in source_terms
+    ]
+    return matched, [original for original, _ in required]
+
+
 def _assess_evidence(
     requirement: dict,
     evidence: dict,
@@ -972,6 +1150,31 @@ def _assess_evidence(
 
     if requirement.get("criterion_type") == "responsibility" and evidence_type == "skills_list":
         return "Missing", "skills_list_does_not_demonstrate_responsibility", 0.0
+
+    # Exact named-technology matching is for individual requirements only.
+    # Grouped capabilities (notably ID 11's troubleshooting/incident criterion)
+    # combine different duties and tool references; treating every extracted
+    # entity in that group as a required technology creates false evidence.
+    group_key = requirement.get("group_key")
+    is_standalone_requirement = not group_key or group_key.startswith("standalone:")
+    if is_standalone_requirement:
+        matched_technical, required_technical = _explicit_technical_entity_matches(
+            requirement, evidence
+        )
+    else:
+        matched_technical, required_technical = [], []
+
+    if required_technical:
+        if not matched_technical:
+            return "Missing", "no_exact_named_technical_entity_evidence", 0.0
+        coverage = len(matched_technical) / len(required_technical)
+        if evidence_type == "skills_list":
+            return "Partial Match", "named_skill_list_without_proficiency_depth", 50.0
+        if evidence_type in ("experience_context", "context_window"):
+            return "Partial Match", "named_technical_skill_in_experience_context", 50.0
+        if evidence_type == "action_statement" and coverage >= 1.0:
+            return "Full Match", "explicit_named_technical_skills_in_action_evidence", 80.0
+        return "Partial Match", "partial_named_technical_skill_overlap", 50.0
 
     # Generic entity alignment is used only for criteria without a specialized
     # evidence rule. Similarity retrieves passages; it does not establish a match.
