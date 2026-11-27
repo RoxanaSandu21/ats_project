@@ -9,7 +9,9 @@ if str(BACKEND_DIR) not in sys.path:
 
 from services.nlp_service import (
     _category,
+    _assess_evidence,
     _criterion_type,
+    _explicit_technical_entity_matches,
     _group_job_requirements,
     _job_exclusion_reason,
     _normalize_technical_entity,
@@ -98,6 +100,49 @@ class JavaJobRequirementExtractionTests(unittest.TestCase):
         self.assertEqual(_normalize_technical_entity("RESTful API"), "restapi")
         self.assertEqual(_normalize_technical_entity("RESTful APIs"), "restapi")
         self.assertNotEqual(_normalize_technical_entity("Java"), _normalize_technical_entity("JavaScript"))
+
+    def test_existing_employer_benefits_remain_excluded(self):
+        benefits = [
+            "The company provides retail vouchers and health insurance.",
+            "Employees can receive tuition fee reimbursement.",
+        ]
+
+        for statement in benefits:
+            with self.subTest(statement=statement):
+                self.assertIsNotNone(_job_exclusion_reason(statement))
+
+    def test_build_and_contribute_responsibilities_are_required(self):
+        self.assertEqual(
+            _priority("Build and enhance RESTful APIs.", "responsibility")[0],
+            "required",
+        )
+        self.assertEqual(
+            _priority("The engineer will contribute to platform maintenance.", "responsibility")[0],
+            "required",
+        )
+
+    def test_restful_api_action_evidence_matches_rest_api_requirement(self):
+        requirement = {
+            "requirement": "Experience building and consuming REST APIs.",
+            "category": "technical skill",
+            "criterion_type": "qualification",
+            "entities": [{"text": "REST APIs", "type": "technical skill"}],
+        }
+        evidence = {
+            "label": "API development responsibility",
+            "quote": "Implemented and maintained RESTful APIs for enterprise applications.",
+            "text": "Implemented and maintained RESTful APIs for enterprise applications.",
+            "evidence_type": "action_statement",
+        }
+
+        matched, required = _explicit_technical_entity_matches(requirement, evidence)
+        self.assertEqual(matched, ["REST APIs"])
+        self.assertEqual(required, ["REST APIs"])
+
+        status, reason, points = _assess_evidence(requirement, evidence, 0.20)
+        self.assertEqual(status, "Full Match")
+        self.assertEqual(reason, "explicit_named_technical_skills_in_action_evidence")
+        self.assertEqual(points, 80.0)
 
     def test_job1_language_group_contains_only_spoken_language_requirement(self):
         job_text = "\n\n".join([

@@ -226,8 +226,10 @@ def _job_exclusion_reason(text: str):
 
     if JOB_SECTION_HEADING_PATTERN.fullmatch(normalized):
         return "Section heading; it does not define an assessable candidate criterion."
-    if re.search(r"\b(compensation|salary|pay range)\b", lowered):
-        return "Compensation information; it must not affect candidate compatibility."
+    if _is_employer_benefit(normalized):
+        if re.search(r"\b(compensation|salary|pay range)\b", lowered):
+            return "Compensation information; it must not affect candidate compatibility."
+        return "Employer-provided benefit; it is not a candidate qualification or responsibility."
     if JOB_INTRO_PATTERN.search(lowered) and not re.search(
         r"\b(experience|knowledge|ability|required|must|proficient|proficiency)\b",
         lowered,
@@ -295,7 +297,12 @@ def _priority(text: str, criterion_type: str) -> Tuple[str, str]:
     # because a skill keyword appears in the advert, but because the posting
     # directly instructs the holder of the role to perform the task.
     if re.match(
-        r"^\s*(?:you will|act as|provide|record|attempt to resolve)\b",
+        r"^\s*(?:you will|act as|provide|record|attempt to resolve|build|enhance|design|develop|"
+        r"implement|contribute|participate|collaborate|write|integrate|maintain|troubleshoot)\b",
+        text,
+        re.IGNORECASE,
+    ) or re.search(
+        r"\bwill\s+(?:contribute|build|enhance|design|develop|implement|participate|collaborate|write|integrate)\b",
         text,
         re.IGNORECASE,
     ):
