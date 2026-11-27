@@ -732,7 +732,7 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
         or "video and audio" in requirement
     ):
         av_mention = has((
-            r"\b(audio[- ]visual|a/v|av equipment|video conferencing|video conference)\b",
+            r"\b(audio[- ]visual|a/v|av equipment|video[- ]conferenc(?:e|ing)s?)\b",
             r"\b(projector|microphone|display setup|sound system|conference room "
             r"(?:av )?(?:equipment|system|setup|hardware))\b",
         ))
