@@ -768,6 +768,45 @@ def _evidence_support_level(requirement_text: str, evidence: dict) -> str:
     def has(patterns) -> bool:
         return any(re.search(pattern, text, re.IGNORECASE) for pattern in patterns)
 
+    # A degree is a factual qualification, not an action statement. It can be
+    # established by an education entry even when CV extraction classifies the
+    # excerpt as ordinary context rather than an action_statement.
+    bachelor_requirement = bool(re.search(
+        r"\b(?:bachelor'?s|baccalaureate)\s+degree\b",
+        requirement,
+    ))
+    if bachelor_requirement:
+        degree_present = bool(re.search(
+            r"\b(?:bachelor(?:'s)?|baccalaureate)\b",
+            quote,
+        ))
+        if not degree_present:
+            return "none"
+
+        field_clause = re.search(
+            r"\bdegree\b\s+in\s+(.+?)(?:\s*,?\s+or equivalent\b|$)",
+            requirement,
+        )
+        target_fields = []
+        if field_clause:
+            for field in re.split(r",|\bor\b", field_clause.group(1)):
+                normalized_field = re.sub(r"^(?:a|an)\s+", "", field.strip())
+                if normalized_field and not re.search(
+                    r"\b(?:related|relevant)\s+field\b",
+                    normalized_field,
+                ):
+                    target_fields.append(normalized_field)
+
+        if not target_fields or any(
+            re.search(rf"\b{re.escape(field)}\b", quote)
+            for field in target_fields
+        ):
+            return "direct"
+
+        # A bachelor's degree is present, but the CV excerpt does not establish
+        # that its discipline matches the fields requested by the posting.
+        return "contextual"
+
     if re.search(r"\benglish\b|language proficiency", requirement):
         explicitly_named = bool(re.search(r"\benglish\b", quote))
         explicit_level = has((

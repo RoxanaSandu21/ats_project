@@ -95,6 +95,76 @@ class JavaJobRequirementExtractionTests(unittest.TestCase):
         )
         self.assertEqual(_priority(text, "qualification")[0], "preferred")
 
+    def test_bachelor_of_science_in_computer_science_is_direct_degree_evidence(self):
+        requirement_text = (
+            "Bachelor's degree in Computer Science, Engineering, Mathematics, "
+            "or a related field, or equivalent practical experience is strongly recommended."
+        )
+        requirement = {
+            "requirement": requirement_text,
+            "category": "qualification",
+            "criterion_type": "qualification",
+            "priority": "preferred",
+            "group_key": "standalone:bachelor degree",
+            "entities": [],
+        }
+        evidence = {
+            "label": "CV context excerpt",
+            "quote": "Bachelor of Science in Computer Science",
+            "text": "Bachelor of Science in Computer Science",
+            "evidence_type": "context",
+        }
+
+        status, reason, points = _assess_evidence(requirement, evidence, 0.775)
+
+        self.assertEqual(status, "Full Match")
+        self.assertEqual(reason, "direct_source_grounded_task_evidence")
+        self.assertEqual(points, 80.0)
+
+    def test_unrelated_bachelor_field_is_contextual_not_a_full_match(self):
+        requirement = {
+            "requirement": "Bachelor's degree in Computer Science, Engineering, Mathematics, or a related field.",
+            "category": "qualification",
+            "criterion_type": "qualification",
+            "priority": "preferred",
+            "group_key": "standalone:bachelor degree",
+            "entities": [],
+        }
+        evidence = {
+            "label": "CV context excerpt",
+            "quote": "Bachelor of Arts in History",
+            "text": "Bachelor of Arts in History",
+            "evidence_type": "context",
+        }
+
+        status, reason, points = _assess_evidence(requirement, evidence, 0.51)
+
+        self.assertEqual(status, "Partial Match")
+        self.assertEqual(reason, "contextual_transferable_evidence")
+        self.assertEqual(points, 50.0)
+
+    def test_degree_requirement_is_not_satisfied_by_a_bare_field_mention(self):
+        requirement = {
+            "requirement": "Bachelor's degree in Computer Science, Engineering, Mathematics, or a related field.",
+            "category": "qualification",
+            "criterion_type": "qualification",
+            "priority": "preferred",
+            "group_key": "standalone:bachelor degree",
+            "entities": [],
+        }
+        evidence = {
+            "label": "CV context excerpt",
+            "quote": "Completed coursework in Computer Science",
+            "text": "Completed coursework in Computer Science",
+            "evidence_type": "context",
+        }
+
+        status, reason, points = _assess_evidence(requirement, evidence, 0.90)
+
+        self.assertEqual(status, "Missing")
+        self.assertEqual(reason, "retrieved_passage_lacks_sufficient_support")
+        self.assertEqual(points, 0.0)
+
     def test_restful_apis_normalize_to_rest_api(self):
         self.assertEqual(_normalize_technical_entity("REST APIs"), "restapi")
         self.assertEqual(_normalize_technical_entity("RESTful API"), "restapi")
